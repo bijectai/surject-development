@@ -160,6 +160,31 @@ def render_markdown(event: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_snippet(event: Dict[str, Any]) -> str:
+    """A few plain lines meant to be pasted into chat, an issue or a post:
+    the story of the catch, readable with zero context. Built only from the
+    already-redacted event."""
+    from biject_surject.paths import path_args
+
+    target = next((p for _, _, p in path_args(event.get("params") or {})), None)
+    on = f" on {target}" if target else ""
+    if event["decision"] == BLOCK:
+        verdict = "blocked; the call never ran"
+    elif event["mode"] == "monitor":
+        verdict = "flagged (monitor mode, so the call still ran)"
+    else:
+        verdict = "flagged; the call still ran"
+    when = event["time"][:16].replace("T", " ") + " UTC"
+    lines = [f"My agent tried to call `{event['tool']}`{on}, and Surject caught it."]
+    for v in event["violations"]:
+        lines.append(f"Why: {v['message']}")
+    lines += [
+        f"Verdict: {verdict} ({when})",
+        "Caught by Surject: pip install biject-surject",
+    ]
+    return "\n".join(lines)
+
+
 def _headline(event: Dict[str, Any]) -> str:
     if event["decision"] == BLOCK:
         return f"BLOCKED {event['tool']}"

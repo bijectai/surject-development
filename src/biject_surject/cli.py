@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from biject_surject import __version__
 from biject_surject.monitor import POLICY_ENV, find_policy
 from biject_surject.policy import DEFAULT_POLICY_FILE, PolicyError, load_policy
-from biject_surject.reporter import STATE_DIR, render_markdown
+from biject_surject.reporter import STATE_DIR, render_markdown, render_snippet
 from biject_surject.templates import DEFAULT_POLICY
 
 
@@ -54,9 +54,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="print the settings.json snippet that installs this hook, then exit")
     p.set_defaults(func=cmd_hook)
 
-    p = sub.add_parser("report", help="list caught violations, or print one report")
-    p.add_argument("id", nargs="?", help="report id (or a unique prefix) to print")
+    p = sub.add_parser("report", help="list caught violations, or print/share one")
+    p.add_argument("id", nargs="?",
+                   help="report id (or a unique prefix), or `last` for the most recent")
     p.add_argument("-n", type=int, default=20, help="how many recent events to list")
+    p.add_argument("--short", action="store_true",
+                   help="a few plain lines to paste into chat or a post, instead of the full report")
+    p.add_argument("--copy", action="store_true", help="copy the report to the clipboard")
     p.set_defaults(func=cmd_report)
     return parser
 
@@ -201,15 +205,30 @@ def cmd_report(args: argparse.Namespace) -> int:
     events = _read_events(log)
 
     if args.id:
-        matches = [e for e in events if e.get("id", "").startswith(args.id)]
+        if args.id == "last":
+            matches = events[-1:]
+        else:
+            matches = [e for e in events if e.get("id", "").startswith(args.id)]
         if not matches:
-            _err(f"no report matching {args.id!r}")
+            _err("nothing caught yet" if args.id == "last" else f"no report matching {args.id!r}")
             return 1
         if len({e["id"] for e in matches}) > 1:
             _err(f"{args.id!r} matches {len(matches)} reports; use more of the id")
             return 1
-        print(render_markdown(matches[-1]))
+        text = (render_snippet if args.short else render_markdown)(matches[-1])
+        if args.copy:
+            from biject_surject.clipboard import copy
+            tool = copy(text)
+            if tool:
+                print(f"copied to clipboard ({'short' if args.short else 'full'} report)",
+                      file=sys.stderr)
+                return 0
+            _err("no clipboard tool found; printing instead")
+        print(text)
         return 0
+    if args.copy or args.short:
+        _err("pass a report id (or `last`) to copy or shorten a report")
+        return 2
 
     if not events:
         print("nothing caught yet")
