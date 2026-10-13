@@ -40,6 +40,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("cmd", nargs=argparse.REMAINDER, help="the command that starts your agent")
     p.set_defaults(func=cmd_watch)
 
+    p = sub.add_parser(
+        "mcp", help="proxy an MCP server over stdio: surject mcp -- npx some-mcp-server",
+    )
+    p.add_argument("--policy", help="policy file (default: nearest surject.yaml)")
+    p.add_argument("cmd", nargs=argparse.REMAINDER, help="the command that starts the MCP server")
+    p.set_defaults(func=cmd_mcp)
+
     p = sub.add_parser("report", help="list caught violations, or print one report")
     p.add_argument("id", nargs="?", help="report id (or a unique prefix) to print")
     p.add_argument("-n", type=int, default=20, help="how many recent events to list")
@@ -138,6 +145,36 @@ def cmd_watch(args: argparse.Namespace) -> int:
         except (KeyboardInterrupt, subprocess.TimeoutExpired):
             proc.kill()
             return 130
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    # stdout carries the MCP protocol: everything human goes to stderr.
+    from biject_surject.mcp_proxy import McpProxy
+    from biject_surject.monitor import Monitor
+
+    cmd = list(args.cmd)
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+    if not cmd:
+        _err("nothing to run; usage: surject mcp -- <mcp server command>")
+        return 2
+    path = Path(args.policy) if args.policy else find_policy()
+    if path is None:
+        _err("no surject.yaml found; pass --policy /path/to/surject.yaml "
+             "(MCP clients often start servers from another folder)")
+        return 1
+    try:
+        monitor = Monitor.from_file(path)
+    except PolicyError as exc:
+        _err(str(exc))
+        return 1
+    try:
+        return McpProxy(monitor, cmd).run()
+    except FileNotFoundError:
+        _err(f"command not found: {cmd[0]}")
+        return 127
+    except KeyboardInterrupt:
+        return 130
 
 
 def cmd_report(args: argparse.Namespace) -> int:

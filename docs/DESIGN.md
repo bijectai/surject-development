@@ -68,7 +68,7 @@ report readable without context.
 | Adapter | How it works | Covers | Effort |
 |---|---|---|---|
 | **A. Launcher** `surject watch -- python agent.py` | Runs the agent with an injected `sitecustomize` that patches known frameworks' tool-call entry points before user code runs | Python agents on LangChain/LangGraph, CrewAI, AutoGen, OpenAI Agents SDK, plus anything using our decorator | Medium; each framework is a small patch module |
-| **B. MCP proxy** `surject watch -- <mcp server cmd>` | Sits between an MCP client and server over stdio and inspects `tools/call` | Any MCP client (Claude Desktop/Code, Cursor, …), any language | Medium |
+| **B. MCP proxy** `surject mcp -- <mcp server cmd>` | Sits between an MCP client and server over stdio and inspects `tools/call` | Any MCP client (Claude Desktop/Code, Cursor, …), any language | Medium |
 | **C. Claude Code hook** | `PreToolUse` hook calls `surject check` | Claude Code only | Small |
 | **D. Library** `@surject.guard` / `surject.check(...)` | User wraps their own tools | Anything in Python, but needs code changes | Small, and A/B/C build on it anyway |
 

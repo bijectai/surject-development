@@ -33,6 +33,28 @@ Surject prints or writes.
 **CrewAI**, **AutoGen**, the **OpenAI Agents SDK**, and any **MCP** client
 built on the Python SDK. No code changes needed.
 
+## MCP servers (Claude Desktop, Claude Code, Cursor, ...)
+
+Put Surject in front of any stdio MCP server, in any language. In your MCP
+client's config, prefix the server command with `surject mcp`:
+
+```json
+{
+  "mcpServers": {
+    "files": {
+      "command": "surject",
+      "args": ["mcp", "--policy", "/path/to/surject.yaml", "--",
+               "npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"]
+    }
+  }
+}
+```
+
+Every `tools/call` is checked before it reaches the server. In enforce mode
+a blocked call never reaches the server; the model gets an error result
+explaining why. Pass `--policy`, since MCP clients usually start servers
+from a different folder.
+
 ## Policy
 
 ```yaml
