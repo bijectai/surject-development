@@ -59,6 +59,7 @@ paths:
 #   equals: value             exact value
 #   one_of: [a, b]            one of a list
 #   regex: "^https://"        must match (anchor with ^ and $ for whole-string)
+#   not_regex: "rm\\\\s+-rf"    must not match anywhere
 #   glob: ["./data/**"]       path must be inside one of these
 #   not_glob: ["./out/**"]    path must not be inside any of these
 #   min: 1 / max: 100         numeric bounds

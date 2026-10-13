@@ -18,7 +18,7 @@ tools:
       file_path: {{ not_glob: ["**/.env", "./data/raw/**"] }}
   Bash:
     params:
-      command: {{ regex: "^(?!.*rm -rf)" }}
+      command: {{ not_regex: "rm -rf" }}
     rate_limit: {{ max: 2, per: 1h }}
 """
 

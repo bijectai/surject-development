@@ -179,3 +179,12 @@ def test_report_last_with_nothing_caught(tmp_path, monkeypatch, capsys):
 
 def test_report_copy_needs_an_id(caught, capsys):
     assert main(["report", "--copy"]) == 2
+
+
+def test_template_has_no_invalid_escapes():
+    import warnings
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "src" / "biject_surject" / "templates.py").read_text(encoding="utf-8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        compile(src, "templates.py", "exec")
