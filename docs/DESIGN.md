@@ -123,4 +123,5 @@ needs a network call), dashboards, accounts, telemetry.
 - Python ≥ 3.9, one runtime dependency (`pyyaml`).
 - The checker must add negligible latency (no I/O, compiled regex/globs).
 - Adapters must fail open in monitor mode: a Surject bug never breaks the
-  user's agent.
+  user's agent. In enforce mode they fail closed: the user asked for
+  blocking, so a call Surject cannot check is blocked.
