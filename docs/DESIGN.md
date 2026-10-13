@@ -1,7 +1,7 @@
 # Surject design (v0 proposal)
 
-Status: **proposal, needs sign-off**. This turns `IDEAS.md` into concrete
-decisions for the first usable release. Open questions are marked **Q**.
+Status: **accepted**. This turns `IDEAS.md` into concrete decisions for the
+first usable release.
 
 ## Shape of the system
 
@@ -72,22 +72,17 @@ report readable without context.
 | **C. Claude Code hook** | `PreToolUse` hook calls `surject check` | Claude Code only | Small |
 | **D. Library** `@surject.guard` / `surject.check(...)` | User wraps their own tools | Anything in Python, but needs code changes | Small, and A/B/C build on it anyway |
 
-**Proposal**: build D first (it is the core API the others call), then **A**
+**Decision**: build D first (it is the core API the others call), then **A**
 as the headline `surject watch` experience, then B, then C.
-
-**Q1.** Agree with D → A → B → C? Or should MCP (B) come first, since it is
-language-agnostic and matches "one command" most literally?
 
 ## Monitor vs. enforce
 
 `IDEAS.md` says Surject "flags" and "surfaces", but also talks about
 "blocked tool calls".
 
-**Proposal**: default `mode: monitor` (never changes agent behaviour, so it
-is safe to install and forget); `mode: enforce` blocks by raising/returning
-an error to the agent in place of running the tool.
-
-**Q2.** Is monitor-by-default right?
+**Decision**: default `mode: monitor` (never changes agent behaviour, so it
+is safe to install and forget); `mode: enforce` is opt-in and blocks by
+raising/returning an error to the agent in place of running the tool.
 
 ## Reports
 
@@ -98,10 +93,25 @@ an error to the agent in place of running the tool.
   `lean-kernel@…`).
 - `surject report` lists recent violations; `surject report <id>` prints one
   ready to paste.
-- Params are recorded as-is by default. **Q3.** Should reports redact
-  secret-looking values (tokens, keys, emails) by default, given the
-  researchers-on-sensitive-data audience? Proposal: yes, with
-  `redact: false` to opt out.
+
+## Secrets are never shown
+
+**Decision**: secret-looking values are redacted **everywhere** Surject
+writes or prints: terminal alerts, `events.jsonl`, report files, exception
+messages, and debug output. There is no opt-out.
+
+- Redaction happens once, at the boundary where a `ToolCall` enters the
+  reporter, so no output path can see raw values.
+- Detected by param name (`*token*`, `*secret*`, `*password*`, `*key*`,
+  `authorization`, `cookie`, …) and by value shape (API-key prefixes such
+  as `sk-`, `ghp_`, `github_pat_`, `AKIA`; JWTs; bearer headers; private
+  key blocks; long high-entropy strings).
+- Replaced with `[REDACTED:<reason>]` so the report still says *that* a
+  secret was there and *why* it was hidden.
+- The checker still sees real values (policies may need them, e.g. a URL
+  regex); only output is redacted.
+- Policies can add extra names/patterns to redact; they cannot remove the
+  built-in ones.
 
 ## Out of scope for v0
 
