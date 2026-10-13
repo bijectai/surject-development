@@ -191,13 +191,18 @@ _DRIVE_RE = re.compile(r"^[A-Za-z]:/")
 
 
 def compile_glob(pattern: str) -> Glob:
-    """``**`` matches across directories, ``*`` and ``?`` stay within one."""
+    """``**`` matches across directories, ``*`` and ``?`` stay within one.
+    ``dir/**`` also matches ``dir`` itself, so deleting or moving the whole
+    folder is caught too."""
     norm = normalize_path(pattern)
     out = []
     i = 0
     while i < len(norm):
         c = norm[i]
-        if norm.startswith("**/", i):
+        if norm.endswith("/**") and i == len(norm) - 3:
+            out.append("(?:/.*)?")
+            i += 3
+        elif norm.startswith("**/", i):
             out.append("(?:.*/)?")
             i += 3
         elif norm.startswith("**", i):

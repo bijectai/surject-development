@@ -121,6 +121,9 @@ def test_normalize_path(raw, norm):
     ("./data/**", "data/a.csv", True),
     ("./data/**", "data/raw/deep/a.csv", True),
     ("./data/**", "database.csv", False),
+    ("./data/**", "data", True),          # the folder itself: rm -rf data
+    ("./.git/**", ".gitignore", False),
+    ("./.git/**", "x/.git", False),
     ("./data/*", "data/a.csv", True),
     ("./data/*", "data/raw/a.csv", False),
     ("**/*.env", ".env", True),  # dotfiles match: safer for deny rules
