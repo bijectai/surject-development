@@ -237,3 +237,16 @@ def test_markdown_report_is_self_contained():
     for needle in ("blocked; the call did not run", "python-reference@0.0.1",
                    "must not be inside ./data/raw/**", "redacted automatically"):
         assert needle in md
+
+
+@pytest.mark.parametrize("source", [
+    r"C:\Users\someone\proj\surject.yaml", "/home/someone/proj/surject.yaml", "surject.yaml",
+])
+def test_reports_never_include_the_full_policy_path(tmp_path, source):
+    policy = parse_policy("tools: {rm: block}", source=source, root=str(tmp_path))
+    stream = io.StringIO()
+    m = surject.Monitor(policy, Reporter(root=tmp_path, stream=stream, policy_source=source))
+    m.check("rm", {"path": "x"})
+    written = everything_written(tmp_path, stream)
+    assert "someone" not in written
+    assert "`surject.yaml`" in written

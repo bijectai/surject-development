@@ -65,7 +65,9 @@ class Reporter:
             "decision": verdict.decision,
             "mode": verdict.mode,
             "checker": verdict.checker,
-            "policy": r.text(self.policy_source) if self.policy_source else None,
+            # File name only: reports get shared, and a full path leaks the
+            # user's username and folder layout.
+            "policy": r.text(_basename(self.policy_source)) if self.policy_source else None,
             "params": r.value(dict(verdict.call.params)),
             "violations": [
                 {
@@ -163,6 +165,10 @@ def _headline(event: Dict[str, Any]) -> str:
         return f"BLOCKED {event['tool']}"
     suffix = " (monitor mode, call allowed)" if event["mode"] == "monitor" else " (call allowed)"
     return f"FLAGGED {event['tool']}{suffix}"
+
+
+def _basename(path: str) -> str:
+    return re.split(r"[\\/]", path.rstrip("\\/"))[-1]
 
 
 def _compact_json(value: Any, limit: int = 300) -> str:

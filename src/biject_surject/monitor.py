@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import os
 import sys
 import threading
 import time
@@ -169,6 +170,8 @@ def _param_binder(f: Callable[..., Any]) -> Callable[[tuple, dict], Dict[str, An
 # Module-level convenience: a default monitor loaded lazily from the nearest
 # surject.yaml (current directory, then parents).
 
+POLICY_ENV = "SURJECT_POLICY"
+
 _default: Optional[Monitor] = None
 _default_lock = threading.Lock()
 
@@ -186,7 +189,8 @@ def default_monitor() -> Monitor:
     global _default
     with _default_lock:
         if _default is None:
-            path = find_policy()
+            env_path = os.environ.get(POLICY_ENV)  # set by `surject watch`
+            path = Path(env_path) if env_path else find_policy()
             if path is None:
                 sys.stderr.write("[surject] no surject.yaml found; nothing is being "
                                  "checked (run `surject init` to create one)\n")

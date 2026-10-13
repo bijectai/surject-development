@@ -26,3 +26,22 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest -q
+
+  frameworks:
+    # Runs Surject against the latest release of each agent framework it
+    # attaches to, installed one at a time the way users install them, so an
+    # upstream API change shows up here first.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: ["langchain-core", "mcp", "mcp<2", "crewai", "autogen-core", "openai-agents"]
+    name: frameworks (${{ matrix.framework }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]" "${{ matrix.framework }}"
+      - run: python -m pip list | grep -iE "^(langchain-core|mcp|crewai|autogen-core|openai-agents) " || true
+      - run: python -m pytest -q -rs tests/integration
