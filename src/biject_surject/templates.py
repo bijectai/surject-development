@@ -23,7 +23,8 @@ unknown_tools: allow
 # Path rules apply to EVERY tool, whatever your framework calls it
 # (write_file, Write, fs_write, save, ...). Surject finds path arguments by
 # name (path, file_path, filename, dest, *_path, *_dir, ...), including
-# nested ones. Paths are matched relative to this file's folder; `**` spans
+# nested ones, and also checks the words of shell commands (`command`,
+# `cmd`, `script`), so `cat .env` in a Bash tool is caught too. Paths are matched relative to this file's folder; `**` spans
 # directories and `~` is your home folder.
 paths:
   # No tool may touch these, read or write.

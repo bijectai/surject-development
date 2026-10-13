@@ -18,7 +18,9 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Mapping, Optional, Tuple
 
 from biject_surject import __version__
-from biject_surject.paths import changes_files, path_args
+from biject_surject.paths import (
+    changes_files, command_args, command_changes_files, command_tokens, path_args,
+)
 from biject_surject.policy import ParamRule, Policy, RateLimit, normalize_path
 
 CHECKER_ID = f"python-reference@{__version__}"
@@ -133,32 +135,44 @@ def _check_paths(policy: Policy, call: ToolCall) -> List[Violation]:
     rules = policy.paths
     if not (rules.protect or rules.read_only):
         return []
+
+    # (label, top-level param, path, "does this change files?", via a command?)
+    targets = []
+    tool_writes = None  # from the tool name; computed only if needed
+    for label, top, raw in path_args(call.params, rules.extra_params):
+        targets.append((label, top, raw, None, False))
+    for label, top, cmd in command_args(call.params):
+        cmd_writes = command_changes_files(cmd)
+        for tok in command_tokens(cmd):
+            targets.append((label, top, tok, cmd_writes, True))
+
     out: List[Violation] = []
     seen = set()
-    writes = None  # computed lazily: only matters for read_only hits
-    for label, top, raw in path_args(call.params, rules.extra_params):
+    for label, top, raw, writes, via_command in targets:
         path = normalize_path(raw, policy.root)
         for i, g in enumerate(rules.protect):
             if g.regex.match(path) and (label, "p", i) not in seen:
                 seen.add((label, "p", i))
-                out.append(Violation(
-                    f"paths.protect[{i}]",
-                    f"'{label}' must not touch {g.pattern} (protected path)",
-                    param=top,
-                ))
+                what = "runs a command that touches" if via_command else "must not touch"
+                out.append(Violation(f"paths.protect[{i}]",
+                                     f"'{label}' {what} {g.pattern} (protected path)",
+                                     param=top))
         for i, g in enumerate(rules.read_only):
-            if g.regex.match(path) and (label, "r", i) not in seen:
-                if writes is None:
-                    writes = changes_files(call.name)
-                if not writes:
-                    continue
-                seen.add((label, "r", i))
-                out.append(Violation(
-                    f"paths.read_only[{i}]",
-                    f"'{label}' is inside {g.pattern}, which is read-only, and "
-                    f"'{call.name}' looks like it changes files",
-                    param=top,
-                ))
+            if not g.regex.match(path) or (label, "r", i) in seen:
+                continue
+            if writes is None:
+                if tool_writes is None:
+                    tool_writes = changes_files(call.name)
+                writes = tool_writes
+            if not writes:
+                continue
+            seen.add((label, "r", i))
+            if via_command:
+                msg = f"'{label}' runs a command that changes {g.pattern}, which is read-only"
+            else:
+                msg = (f"'{label}' is inside {g.pattern}, which is read-only, and "
+                       f"'{call.name}' looks like it changes files")
+            out.append(Violation(f"paths.read_only[{i}]", msg, param=top))
     return out
 
 

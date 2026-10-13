@@ -41,6 +41,8 @@ def test_init_writes_valid_policy(tmp_path, monkeypatch, capsys):
     ("mcp__fs__edit_file", {"edits": [{"path": ".env.local"}]}),    # nested MCP args
     ("save", {"destination": "~/.ssh/authorized_keys"}),            # home folder
     ("Edit", {"file_path": "{root}/.git/config"}),                  # read-only dir
+    ("Bash", {"command": "cat .env"}),                              # inside a shell command
+    ("Bash", {"command": "rm -rf .git"}),                           # whole read-only folder
 ])
 def test_default_policy_catches_risky_paths_whatever_the_tool_name(tmp_path, monkeypatch, tool, params):
     monkeypatch.chdir(tmp_path)
@@ -54,7 +56,8 @@ def test_default_policy_catches_risky_paths_whatever_the_tool_name(tmp_path, mon
 @pytest.mark.parametrize("tool, params", [
     ("write_file", {"path": "out/results.csv"}),
     ("Read", {"file_path": "{root}/.git/HEAD"}),     # reading .git is fine
-    ("Bash", {"command": "cat .env"}),               # shell strings aren't parsed (yet)
+    ("Bash", {"command": "ls -la && git status && cat README.md"}),
+    ("Bash", {"command": "grep -r TODO .git"}),      # reading .git is fine
     ("http_get", {"url": "https://example.com/.env"}),
 ])
 def test_default_policy_stays_quiet_on_normal_calls(tmp_path, monkeypatch, tool, params):
