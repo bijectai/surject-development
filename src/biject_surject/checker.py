@@ -71,6 +71,15 @@ class History:
             while q and q[0] < cutoff:
                 q.popleft()
 
+    def snapshot(self) -> List[Tuple[str, float]]:
+        """All recorded (tool, timestamp) pairs, oldest first."""
+        return sorted(((name, ts) for name, q in self._by_tool.items() for ts in q),
+                      key=lambda c: c[1])
+
+    def restore(self, calls: List[Tuple[str, float]]) -> None:
+        for name, ts in sorted(calls, key=lambda c: c[1]):
+            self.record(ToolCall(name, {}, timestamp=ts))
+
     def count(self, since: float, tool: Optional[str] = None) -> int:
         q = self._all if tool is None else self._by_tool.get(tool, ())
         return sum(1 for ts in q if ts > since)

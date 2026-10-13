@@ -55,6 +55,27 @@ a blocked call never reaches the server; the model gets an error result
 explaining why. Pass `--policy`, since MCP clients usually start servers
 from a different folder.
 
+## Claude Code
+
+Run Surject as a Claude Code `PreToolUse` hook. `surject hook claude-code
+--print-config` prints the snippet for `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "*",
+        "hooks": [{ "type": "command", "command": "surject hook claude-code" }] }
+    ]
+  }
+}
+```
+
+Rules use Claude Code's tool names (`Write`, `Edit`, `Bash`, `Read`,
+`mcp__<server>__<tool>`). In enforce mode a blocked call is denied and Claude
+is told why; in monitor mode you get a warning and Claude Code's normal
+permission flow continues.
+
 ## Policy
 
 ```yaml
