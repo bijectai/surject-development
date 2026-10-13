@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Mapping, Optional, Tuple
 
 from biject_surject import __version__
+from biject_surject.paths import changes_files, path_args
 from biject_surject.policy import ParamRule, Policy, RateLimit, normalize_path
 
 CHECKER_ID = f"python-reference@{__version__}"
@@ -106,6 +107,9 @@ def check(policy: Policy, call: ToolCall, history: Optional[History] = None) -> 
             where = f"tools.{call.name}.params.{pname}"
             violations.extend(_check_param(pname, prule, call.params, where, policy.root))
 
+    if tool is None or not tool.blocked:
+        violations.extend(_check_paths(policy, call))
+
     if history is not None:
         if tool is not None and tool.rate_limit is not None:
             v = _check_rate(tool.rate_limit, call, history, call.name,
@@ -123,6 +127,39 @@ def check(policy: Policy, call: ToolCall, history: Optional[History] = None) -> 
         violations=tuple(violations),
         mode=policy.mode,
     )
+
+
+def _check_paths(policy: Policy, call: ToolCall) -> List[Violation]:
+    rules = policy.paths
+    if not (rules.protect or rules.read_only):
+        return []
+    out: List[Violation] = []
+    seen = set()
+    writes = None  # computed lazily: only matters for read_only hits
+    for label, top, raw in path_args(call.params, rules.extra_params):
+        path = normalize_path(raw, policy.root)
+        for i, g in enumerate(rules.protect):
+            if g.regex.match(path) and (label, "p", i) not in seen:
+                seen.add((label, "p", i))
+                out.append(Violation(
+                    f"paths.protect[{i}]",
+                    f"'{label}' must not touch {g.pattern} (protected path)",
+                    param=top,
+                ))
+        for i, g in enumerate(rules.read_only):
+            if g.regex.match(path) and (label, "r", i) not in seen:
+                if writes is None:
+                    writes = changes_files(call.name)
+                if not writes:
+                    continue
+                seen.add((label, "r", i))
+                out.append(Violation(
+                    f"paths.read_only[{i}]",
+                    f"'{label}' is inside {g.pattern}, which is read-only, and "
+                    f"'{call.name}' looks like it changes files",
+                    param=top,
+                ))
+    return out
 
 
 def _decide(mode: str, violations: List[Violation]) -> str:

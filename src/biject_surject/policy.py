@@ -7,6 +7,7 @@ Every error names the exact location in the file that is wrong.
 
 from __future__ import annotations
 
+import os
 import posixpath
 import re
 from dataclasses import dataclass, field
@@ -70,11 +71,21 @@ class ToolRule:
 
 
 @dataclass(frozen=True)
+class PathRules:
+    """Rules on path-like arguments of *any* tool, whatever it's called."""
+
+    protect: Tuple[Glob, ...] = ()     # no tool may touch these
+    read_only: Tuple[Glob, ...] = ()   # tools may read but not change these
+    extra_params: Tuple[str, ...] = ()  # more argument names to treat as paths
+
+
+@dataclass(frozen=True)
 class Policy:
     version: int = 1
     mode: str = "monitor"
     unknown_tools: str = "warn"
     tools: Mapping[str, ToolRule] = field(default_factory=dict)
+    paths: PathRules = field(default_factory=PathRules)
     rate_limit: Optional[RateLimit] = None
     redact_names: Tuple[str, ...] = ()
     redact_patterns: Tuple[Pattern[str], ...] = ()
@@ -113,7 +124,7 @@ def parse_policy(text: str, source: Optional[str] = None,
 def policy_from_dict(data: Any, source: Optional[str] = None,
                      root: Optional[str] = None) -> Policy:
     _expect(data, dict, "policy")
-    _reject_unknown(data, {"version", "mode", "unknown_tools", "tools",
+    _reject_unknown(data, {"version", "mode", "unknown_tools", "tools", "paths",
                            "rate_limit", "redact"}, "policy")
 
     version = data.get("version", 1)
@@ -133,6 +144,8 @@ def policy_from_dict(data: Any, source: Optional[str] = None,
         for name, spec in tools_raw.items()
     }
 
+    paths = _parse_paths(data.get("paths"), "paths")
+
     rate = data.get("rate_limit")
     rate_limit = _parse_rate_limit(rate, "rate_limit") if rate is not None else None
 
@@ -143,6 +156,7 @@ def policy_from_dict(data: Any, source: Optional[str] = None,
         mode=mode,
         unknown_tools=unknown,
         tools=tools,
+        paths=paths,
         rate_limit=rate_limit,
         redact_names=redact_names,
         redact_patterns=redact_patterns,
@@ -155,7 +169,9 @@ def normalize_path(value: str, root: Optional[str] = None) -> str:
     """Normalize a path for glob matching: forward slashes, no ``.``/``..``
     segments, no leading ``./``. If ``root`` is given and the path is an
     absolute path inside it, return it relative to ``root``. Pure string
-    work; never touches the disk."""
+    work apart from expanding a leading ``~``; never touches the disk."""
+    if value.startswith("~"):
+        value = os.path.expanduser(value)
     norm = posixpath.normpath(value.replace("\\", "/"))
     if norm == ".":
         return ""
@@ -175,13 +191,18 @@ _DRIVE_RE = re.compile(r"^[A-Za-z]:/")
 
 
 def compile_glob(pattern: str) -> Glob:
-    """``**`` matches across directories, ``*`` and ``?`` stay within one."""
+    """``**`` matches across directories, ``*`` and ``?`` stay within one.
+    ``dir/**`` also matches ``dir`` itself, so deleting or moving the whole
+    folder is caught too."""
     norm = normalize_path(pattern)
     out = []
     i = 0
     while i < len(norm):
         c = norm[i]
-        if norm.startswith("**/", i):
+        if norm.endswith("/**") and i == len(norm) - 3:
+            out.append("(?:/.*)?")
+            i += 3
+        elif norm.startswith("**/", i):
             out.append("(?:.*/)?")
             i += 3
         elif norm.startswith("**", i):
@@ -196,7 +217,9 @@ def compile_glob(pattern: str) -> Glob:
         else:
             out.append(re.escape(c))
             i += 1
-    return Glob(pattern=pattern, regex=re.compile("^" + "".join(out) + "$"))
+    # Windows drive paths are case-insensitive.
+    flags = re.IGNORECASE if _DRIVE_RE.match(norm) else 0
+    return Glob(pattern=pattern, regex=re.compile("^" + "".join(out) + "$", flags))
 
 
 def parse_duration(value: Any, where: str) -> float:
@@ -293,6 +316,20 @@ def _parse_rate_limit(spec: Any, where: str) -> RateLimit:
     if isinstance(mx, bool) or not isinstance(mx, int) or mx < 1:
         raise PolicyError("max must be a positive integer", f"{where}.max")
     return RateLimit(max=mx, per=parse_duration(spec["per"], f"{where}.per"))
+
+
+def _parse_paths(spec: Any, where: str) -> PathRules:
+    if spec is None:
+        return PathRules()
+    _expect(spec, dict, where)
+    _reject_unknown(spec, {"protect", "read_only", "params"}, where)
+    return PathRules(
+        protect=tuple(compile_glob(p) for p in
+                      _string_list(spec.get("protect", []), f"{where}.protect")),
+        read_only=tuple(compile_glob(p) for p in
+                        _string_list(spec.get("read_only", []), f"{where}.read_only")),
+        extra_params=tuple(_string_list(spec.get("params", []), f"{where}.params")),
+    )
 
 
 def _parse_redact(spec: Any, where: str) -> Tuple[Tuple[str, ...], Tuple[Pattern[str], ...]]:

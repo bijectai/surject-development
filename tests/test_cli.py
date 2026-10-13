@@ -30,18 +30,40 @@ def test_init_writes_valid_policy(tmp_path, monkeypatch, capsys):
     assert main(["init"]) == 0
     policy = load_policy(tmp_path / "surject.yaml")
     assert policy.mode == "monitor"
-    assert "write_file" in policy.tools
+    assert policy.paths.protect and policy.paths.read_only
     assert "created surject.yaml" in capsys.readouterr().out
 
 
-def test_init_default_policy_catches_env_writes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("tool, params", [
+    ("write_file", {"path": "config/.env"}),                        # LangChain-style
+    ("Write", {"file_path": "{root}/.env", "content": "x"}),        # Claude Code
+    ("Read", {"file_path": "{root}/certs/server.pem"}),             # reads count too
+    ("mcp__fs__edit_file", {"edits": [{"path": ".env.local"}]}),    # nested MCP args
+    ("save", {"destination": "~/.ssh/authorized_keys"}),            # home folder
+    ("Edit", {"file_path": "{root}/.git/config"}),                  # read-only dir
+])
+def test_default_policy_catches_risky_paths_whatever_the_tool_name(tmp_path, monkeypatch, tool, params):
     monkeypatch.chdir(tmp_path)
     main(["init"])
     m = surject.Monitor(load_policy(tmp_path / "surject.yaml"),
                         Reporter(root=tmp_path, stream=io.StringIO()))
-    assert not m.check("write_file", {"path": "config/.env"}).ok
-    assert not m.check("write_file", {"path": str(tmp_path / ".git" / "HEAD")}).ok
-    assert m.check("write_file", {"path": "out/results.csv"}).ok
+    params = json.loads(json.dumps(params).replace("{root}", tmp_path.as_posix()))
+    assert not m.check(tool, params).ok
+
+
+@pytest.mark.parametrize("tool, params", [
+    ("write_file", {"path": "out/results.csv"}),
+    ("Read", {"file_path": "{root}/.git/HEAD"}),     # reading .git is fine
+    ("Bash", {"command": "cat .env"}),               # shell strings aren't parsed (yet)
+    ("http_get", {"url": "https://example.com/.env"}),
+])
+def test_default_policy_stays_quiet_on_normal_calls(tmp_path, monkeypatch, tool, params):
+    monkeypatch.chdir(tmp_path)
+    main(["init"])
+    m = surject.Monitor(load_policy(tmp_path / "surject.yaml"),
+                        Reporter(root=tmp_path, stream=io.StringIO()))
+    params = json.loads(json.dumps(params).replace("{root}", tmp_path.as_posix()))
+    assert m.check(tool, params).ok
 
 
 def test_init_refuses_to_overwrite(tmp_path, monkeypatch, capsys):

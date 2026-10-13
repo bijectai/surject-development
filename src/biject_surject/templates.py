@@ -20,8 +20,37 @@ mode: monitor
 #   block - treat them as violations (strict allowlist)
 unknown_tools: allow
 
-# Rules per tool, keyed by the tool's name as your agent framework calls it.
-# A tool can be `allow`, `block`, or a mapping of param rules + rate limit.
+# Path rules apply to EVERY tool, whatever your framework calls it
+# (write_file, Write, fs_write, save, ...). Surject finds path arguments by
+# name (path, file_path, filename, dest, *_path, *_dir, ...), including
+# nested ones. Paths are matched relative to this file's folder; `**` spans
+# directories and `~` is your home folder.
+paths:
+  # No tool may touch these, read or write.
+  protect:
+    - "**/.env"
+    - "**/.env.*"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/id_rsa*"
+    - "**/id_ed25519*"
+    - "~/.ssh/**"
+    - "~/.aws/**"
+    - "~/.config/gcloud/**"
+
+  # Tools may read these but not change them. Surject guesses from the tool's
+  # name whether it changes files (write, edit, delete, move, ...); when the
+  # name is unclear it assumes it does.
+  read_only:
+    - "./.git/**"
+    # - "./data/raw/**"     # e.g. keep raw experiment data untouched
+
+  # More argument names to treat as paths, if your tools use unusual ones.
+  # params: [notebook, artifact]
+
+# Rules for specific tools, keyed by the tool's name as your agent framework
+# calls it. A tool can be `allow`, `block`, or a mapping of param rules plus
+# a rate limit.
 #
 # Param rules:
 #   required: true            the param must be present
@@ -30,29 +59,11 @@ unknown_tools: allow
 #   one_of: [a, b]            one of a list
 #   regex: "^https://"        must match (anchor with ^ and $ for whole-string)
 #   glob: ["./data/**"]       path must be inside one of these
-#   not_glob: ["./.env"]      path must not be inside any of these
+#   not_glob: ["./out/**"]    path must not be inside any of these
 #   min: 1 / max: 100         numeric bounds
 #   max_length: 1000          max length of a string, list or mapping
-#
-# Paths are matched relative to this file's folder; `**` spans directories.
-tools:
-  write_file:
-    params:
-      path:
-        not_glob:
-          - "**/.env"
-          - "**/*.pem"
-          - "**/*.key"
-          - "./.git/**"
-
-  delete_file:
-    params:
-      path:
-        not_glob:
-          - "./.git/**"
-          - "**/.env"
-
-  # Examples. Uncomment and rename to match your agent's tools.
+tools: {}
+  # Examples. Uncomment (and remove the `{}` above) to use them.
   #
   # read_file:
   #   params:
