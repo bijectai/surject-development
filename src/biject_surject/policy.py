@@ -112,19 +112,23 @@ def load_policy(path: Union[str, Path] = DEFAULT_POLICY_FILE) -> Policy:
 
 
 def parse_policy(text: str, source: Optional[str] = None,
-                 root: Optional[str] = None) -> Policy:
+                 root: Optional[str] = None, home: Optional[str] = None) -> Policy:
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise PolicyError(f"invalid YAML: {exc}", source or "") from None
     if data is None:
         data = {}
-    return policy_from_dict(data, source=source, root=root)
+    return policy_from_dict(data, source=source, root=root, home=home)
 
 
 def policy_from_dict(data: Any, source: Optional[str] = None,
-                     root: Optional[str] = None) -> Policy:
+                     root: Optional[str] = None, home: Optional[str] = None) -> Policy:
+    """``root`` is the project folder (relative path rules are relative to
+    it); ``home`` is used for ``~`` and defaults to the current user's."""
     _expect(data, dict, "policy")
+    root = normalize_path(root, home=home) if root else None
+    ctx = _Ctx(root=root, home=home)
     _reject_unknown(data, {"version", "mode", "unknown_tools", "tools", "paths",
                            "rate_limit", "redact"}, "policy")
 
@@ -141,11 +145,11 @@ def policy_from_dict(data: Any, source: Optional[str] = None,
     tools_raw = data.get("tools") or {}
     _expect(tools_raw, dict, "tools")
     tools = {
-        str(name): _parse_tool(spec, f"tools.{name}")
+        str(name): _parse_tool(spec, f"tools.{name}", ctx)
         for name, spec in tools_raw.items()
     }
 
-    paths = _parse_paths(data.get("paths"), "paths")
+    paths = _parse_paths(data.get("paths"), "paths", ctx)
 
     rate = data.get("rate_limit")
     rate_limit = _parse_rate_limit(rate, "rate_limit") if rate is not None else None
@@ -162,17 +166,24 @@ def policy_from_dict(data: Any, source: Optional[str] = None,
         redact_names=redact_names,
         redact_patterns=redact_patterns,
         source=source,
-        root=normalize_path(root) if root else None,
+        root=root,
     )
 
 
-def normalize_path(value: str, root: Optional[str] = None) -> str:
-    """Normalize a path for glob matching: forward slashes, no ``.``/``..``
-    segments, no leading ``./``. If ``root`` is given and the path is an
-    absolute path inside it, return it relative to ``root``. Pure string
-    work apart from expanding a leading ``~``; never touches the disk."""
-    if value.startswith("~"):
-        value = os.path.expanduser(value)
+@dataclass(frozen=True)
+class _Ctx:
+    root: Optional[str]
+    home: Optional[str]
+
+
+def normalize_path(value: str, root: Optional[str] = None,
+                   home: Optional[str] = None) -> str:
+    """Normalize a path for matching, exactly as docs/KERNEL.md section 3:
+    expand a leading ``~`` (not ``~user``) to ``home``; forward slashes;
+    POSIX normpath; no leading ``./``; and if ``root`` is given and the path
+    is inside it, make it relative to ``root``. Never touches the disk."""
+    if value == "~" or value.startswith(("~/", "~\\")):
+        value = (home if home is not None else os.path.expanduser("~")) + value[1:]
     norm = posixpath.normpath(value.replace("\\", "/"))
     if norm == ".":
         return ""
@@ -191,11 +202,18 @@ def normalize_path(value: str, root: Optional[str] = None) -> str:
 _DRIVE_RE = re.compile(r"^[A-Za-z]:/")
 
 
-def compile_glob(pattern: str) -> Glob:
+def compile_glob(pattern: str, root: Optional[str] = None,
+                 home: Optional[str] = None) -> Glob:
     """``**`` matches across directories, ``*`` and ``?`` stay within one.
     ``dir/**`` also matches ``dir`` itself, so deleting or moving the whole
-    folder is caught too."""
-    norm = normalize_path(pattern)
+    folder is caught too. The pattern goes through the same normalization
+    as values (including ``root``), so absolute patterns inside the project
+    match project-relative values."""
+    absolute = normalize_path(pattern, home=home)
+    # Windows paths are case-insensitive: drive-letter patterns, and every
+    # pattern in a project that lives on a drive.
+    fold = bool(_DRIVE_RE.match(absolute) or (root and _DRIVE_RE.match(root)))
+    norm = normalize_path(pattern, root, home)
     out = []
     i = 0
     while i < len(norm):
@@ -218,8 +236,7 @@ def compile_glob(pattern: str) -> Glob:
         else:
             out.append(re.escape(c))
             i += 1
-    # Windows drive paths are case-insensitive.
-    flags = re.IGNORECASE if _DRIVE_RE.match(norm) else 0
+    flags = re.IGNORECASE if fold else 0
     return Glob(pattern=pattern, regex=re.compile("^" + "".join(out) + "$", flags))
 
 
@@ -242,7 +259,7 @@ def parse_duration(value: Any, where: str) -> float:
 # Section parsers
 
 
-def _parse_tool(spec: Any, where: str) -> ToolRule:
+def _parse_tool(spec: Any, where: str, ctx: "_Ctx") -> ToolRule:
     if spec is None or spec == "allow":
         return ToolRule()
     if spec == "block":
@@ -254,7 +271,7 @@ def _parse_tool(spec: Any, where: str) -> ToolRule:
     params_raw = spec.get("params") or {}
     _expect(params_raw, dict, f"{where}.params")
     params = {
-        str(name): _parse_param(rule, f"{where}.params.{name}")
+        str(name): _parse_param(rule, f"{where}.params.{name}", ctx)
         for name, rule in params_raw.items()
     }
     rate = spec.get("rate_limit")
@@ -266,7 +283,7 @@ _PARAM_KEYS = {"required", "type", "equals", "one_of", "regex", "not_regex", "gl
                "not_glob", "min", "max", "max_length"}
 
 
-def _parse_param(rule: Any, where: str) -> ParamRule:
+def _parse_param(rule: Any, where: str, ctx: "_Ctx") -> ParamRule:
     _expect(rule, dict, where)
     _reject_unknown(rule, _PARAM_KEYS, where)
     kw: Dict[str, Any] = {}
@@ -289,7 +306,7 @@ def _parse_param(rule: Any, where: str) -> ParamRule:
     for key in ("glob", "not_glob"):
         if key in rule:
             kw[key] = tuple(
-                compile_glob(p)
+                compile_glob(p, ctx.root, ctx.home)
                 for p in _string_list(rule[key], f"{where}.{key}")
             )
     for key in ("min", "max"):
@@ -320,15 +337,15 @@ def _parse_rate_limit(spec: Any, where: str) -> RateLimit:
     return RateLimit(max=mx, per=parse_duration(spec["per"], f"{where}.per"))
 
 
-def _parse_paths(spec: Any, where: str) -> PathRules:
+def _parse_paths(spec: Any, where: str, ctx: "_Ctx") -> PathRules:
     if spec is None:
         return PathRules()
     _expect(spec, dict, where)
     _reject_unknown(spec, {"protect", "read_only", "params"}, where)
     return PathRules(
-        protect=tuple(compile_glob(p) for p in
+        protect=tuple(compile_glob(p, ctx.root, ctx.home) for p in
                       _string_list(spec.get("protect", []), f"{where}.protect")),
-        read_only=tuple(compile_glob(p) for p in
+        read_only=tuple(compile_glob(p, ctx.root, ctx.home) for p in
                         _string_list(spec.get("read_only", []), f"{where}.read_only")),
         extra_params=tuple(_string_list(spec.get("params", []), f"{where}.params")),
     )

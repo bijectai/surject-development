@@ -42,7 +42,8 @@ class Violation:
     rule: str                     # e.g. "tools.write_file.params.path.not_glob[0]"
     message: str                  # describes the rule, never the value
     severity: str = BLOCK         # "warn" or "block"
-    param: Optional[str] = None   # which param failed, if any
+    param: Optional[str] = None   # which top-level param failed, if any
+    label: Optional[str] = None   # the argument path, e.g. "edits[0].path"
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,10 @@ class History:
         return sum(1 for ts in q if ts > since)
 
 
-def check(policy: Policy, call: ToolCall, history: Optional[History] = None) -> Verdict:
+def check(policy: Policy, call: ToolCall, history: Optional[History] = None,
+          home: Optional[str] = None) -> Verdict:
+    """The reference semantics of docs/KERNEL.md section 2. ``home`` is used
+    for ``~`` in argument values; it defaults to the current user's."""
     violations: List[Violation] = []
     tool = policy.tools.get(call.name)
 
@@ -107,10 +111,11 @@ def check(policy: Policy, call: ToolCall, history: Optional[History] = None) -> 
     else:
         for pname, prule in tool.params.items():
             where = f"tools.{call.name}.params.{pname}"
-            violations.extend(_check_param(pname, prule, call.params, where, policy.root))
+            violations.extend(_check_param(pname, prule, call.params, where,
+                                           policy.root, home))
 
     if tool is None or not tool.blocked:
-        violations.extend(_check_paths(policy, call))
+        violations.extend(_check_paths(policy, call, home))
 
     if history is not None:
         if tool is not None and tool.rate_limit is not None:
@@ -131,7 +136,7 @@ def check(policy: Policy, call: ToolCall, history: Optional[History] = None) -> 
     )
 
 
-def _check_paths(policy: Policy, call: ToolCall) -> List[Violation]:
+def _check_paths(policy: Policy, call: ToolCall, home: Optional[str] = None) -> List[Violation]:
     rules = policy.paths
     if not (rules.protect or rules.read_only):
         return []
@@ -149,14 +154,14 @@ def _check_paths(policy: Policy, call: ToolCall) -> List[Violation]:
     out: List[Violation] = []
     seen = set()
     for label, top, raw, writes, via_command in targets:
-        path = normalize_path(raw, policy.root)
+        path = normalize_path(raw, policy.root, home)
         for i, g in enumerate(rules.protect):
             if g.regex.match(path) and (label, "p", i) not in seen:
                 seen.add((label, "p", i))
                 what = "runs a command that touches" if via_command else "must not touch"
                 out.append(Violation(f"paths.protect[{i}]",
                                      f"'{label}' {what} {g.pattern} (protected path)",
-                                     param=top))
+                                     param=top, label=label))
         for i, g in enumerate(rules.read_only):
             if not g.regex.match(path) or (label, "r", i) in seen:
                 continue
@@ -172,7 +177,7 @@ def _check_paths(policy: Policy, call: ToolCall) -> List[Violation]:
             else:
                 msg = (f"'{label}' is inside {g.pattern}, which is read-only, and "
                        f"'{call.name}' looks like it changes files")
-            out.append(Violation(f"paths.read_only[{i}]", msg, param=top))
+            out.append(Violation(f"paths.read_only[{i}]", msg, param=top, label=label))
     return out
 
 
@@ -187,6 +192,8 @@ def _decide(mode: str, violations: List[Violation]) -> str:
 def _check_rate(limit: RateLimit, call: ToolCall, history: History,
                 tool: Optional[str], rule: str) -> Optional[Violation]:
     recent = history.count(since=call.timestamp - limit.per, tool=tool)
+    if recent is None:  # no count available for this window: not checked
+        return None
     if recent + 1 > limit.max:
         scope = f"'{tool}'" if tool else "all tools"
         return Violation(
@@ -200,23 +207,25 @@ _MISSING = object()
 
 
 def _check_param(name: str, rule: ParamRule, params: Mapping[str, Any],
-                 where: str, root: Optional[str] = None) -> List[Violation]:
+                 where: str, root: Optional[str] = None,
+                 home: Optional[str] = None) -> List[Violation]:
     value = params.get(name, _MISSING) if isinstance(params, Mapping) else _MISSING
     if value is _MISSING:
         if rule.required:
-            return [Violation(f"{where}.required", f"'{name}' is required", param=name)]
+            return [Violation(f"{where}.required", f"'{name}' is required",
+                              param=name, label=name)]
         return []
 
     out: List[Violation] = []
 
     def fail(key: str, msg: str) -> None:
-        out.append(Violation(f"{where}.{key}", f"'{name}' {msg}", param=name))
+        out.append(Violation(f"{where}.{key}", f"'{name}' {msg}", param=name, label=name))
 
     if rule.type is not None and not _is_type(value, rule.type):
         fail("type", f"must be of type {rule.type} (got {_type_name(value)})")
-    if rule.has_equals and value != rule.equals:
+    if rule.has_equals and not json_equal(value, rule.equals):
         fail("equals", "must equal the configured value")
-    if rule.one_of is not None and value not in rule.one_of:
+    if rule.one_of is not None and not any(json_equal(value, o) for o in rule.one_of):
         fail("one_of", f"must be one of {list(rule.one_of)}")
     if rule.regex is not None:
         if not isinstance(value, str):
@@ -233,7 +242,7 @@ def _check_param(name: str, rule: ParamRule, params: Mapping[str, Any],
             key = "glob" if rule.glob else "not_glob"
             fail(key, "must be a path string")
         else:
-            path = normalize_path(value, root)
+            path = normalize_path(value, root, home)
             if rule.glob and not any(g.regex.match(path) for g in rule.glob):
                 fail("glob", f"must be inside {', '.join(g.pattern for g in rule.glob)}")
             for i, g in enumerate(rule.not_glob):
@@ -258,8 +267,10 @@ def _check_param(name: str, rule: ParamRule, params: Mapping[str, Any],
 def _is_type(value: Any, name: str) -> bool:
     if name == "string":
         return isinstance(value, str)
-    if name == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
+    if name == "integer":  # by value: 3 and 3.0 are both integers
+        if isinstance(value, bool):
+            return False
+        return isinstance(value, int) or (isinstance(value, float) and value.is_integer())
     if name == "number":
         return isinstance(value, (int, float)) and not isinstance(value, bool)
     if name == "boolean":
@@ -271,6 +282,21 @@ def _is_type(value: Any, name: str) -> bool:
     if name == "null":
         return value is None
     return False
+
+
+def json_equal(a: Any, b: Any) -> bool:
+    """Equality as JSON sees it: ``true`` is not ``1``, ``1`` is ``1.0``."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    if isinstance(a, Mapping) and isinstance(b, Mapping):
+        return a.keys() == b.keys() and all(json_equal(a[k], b[k]) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(json_equal(x, y) for x, y in zip(a, b))
+    if isinstance(a, (int, float, Mapping, list, tuple)) or isinstance(b, (int, float, Mapping, list, tuple)):
+        return False
+    return a == b
 
 
 def _type_name(value: Any) -> str:
