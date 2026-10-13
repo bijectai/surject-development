@@ -107,8 +107,9 @@ def cmd_validate(args: argparse.Namespace) -> int:
     except PolicyError as exc:
         _err(str(exc))
         return 1
-    print(f"{path}: ok ({len(policy.tools)} tool rule(s), mode {policy.mode}, "
-          f"unknown tools {policy.unknown_tools})")
+    path_rules = len(policy.paths.protect) + len(policy.paths.read_only)
+    print(f"{path}: ok (mode {policy.mode}; {path_rules} path rule(s), "
+          f"{len(policy.tools)} tool rule(s); unknown tools {policy.unknown_tools})")
     return 0
 
 

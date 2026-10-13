@@ -11,10 +11,24 @@ requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Adeel Khatri" }]
-keywords = ["agents", "llm", "guardrails", "monitoring", "policy"]
+keywords = ["agents", "llm", "guardrails", "monitoring", "policy", "mcp",
+            "langchain", "langgraph", "crewai", "autogen", "claude-code"]
 classifiers = [
-    "Programming Language :: Python :: 3",
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
 ]
 dependencies = ["pyyaml>=6.0"]
 
@@ -25,10 +39,25 @@ dev = ["pytest>=8"]
 surject = "biject_surject.cli:main"
 
 [project.urls]
+Documentation = "https://github.com/bijectai/surject-development/tree/main/docs"
 Repository = "https://github.com/bijectai/surject-development"
+Issues = "https://github.com/bijectai/surject-development/issues"
+Changelog = "https://github.com/bijectai/surject-development/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/biject_surject"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "tests/",
+    "docs/",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "LICENSE",
+    "pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
