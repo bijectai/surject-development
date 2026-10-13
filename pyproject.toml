@@ -5,16 +5,30 @@ build-backend = "hatchling.build"
 [project]
 name = "biject-surject"
 version = "0.0.1"
-description = "Placeholder for biject-surject"
+description = "A one-command, lightweight monitor that catches when an AI agent does something you didn't intend."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Adeel Khatri" }]
+keywords = ["agents", "llm", "guardrails", "monitoring", "policy"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
+dependencies = ["pyyaml>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+surject = "biject_surject.cli:main"
+
+[project.urls]
+Repository = "https://github.com/bijectai/surject-development"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/biject_surject"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
