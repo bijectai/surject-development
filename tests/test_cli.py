@@ -132,3 +132,50 @@ def test_report_lists_and_prints(tmp_path, monkeypatch, capsys):
     assert "# Surject caught `rm`" in capsys.readouterr().out
 
     assert main(["report", "nope"]) == 1
+
+
+@pytest.fixture
+def caught(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "surject.yaml").write_text(
+        "paths: {read_only: ['./data/raw/**']}\nunknown_tools: allow\n", encoding="utf-8")
+    m = surject.Monitor(load_policy(tmp_path / "surject.yaml"),
+                        Reporter(root=tmp_path, stream=io.StringIO()))
+    m.check("write_file", {"path": "data/raw/exp_07.csv", "api_key": "sk-proj-AbCdEfGhIjKlMnOpQrSt"})
+    return tmp_path
+
+
+def test_report_last_short_snippet(caught, capsys):
+    assert main(["report", "last", "--short"]) == 0
+    out = capsys.readouterr().out.strip().splitlines()
+    assert out[0] == "My agent tried to call `write_file` on data/raw/exp_07.csv, and Surject caught it."
+    assert out[1].startswith("Why: 'path' is inside ./data/raw/**, which is read-only")
+    assert out[2].startswith("Verdict: flagged (monitor mode, so the call still ran)")
+    assert out[3] == "Caught by Surject: pip install biject-surject"
+    assert "sk-proj" not in "\n".join(out)
+
+
+def test_report_copy_uses_clipboard(caught, capsys, monkeypatch):
+    copied = []
+    monkeypatch.setattr("biject_surject.clipboard.copy", lambda text: copied.append(text) or "clip")
+    assert main(["report", "last", "--copy", "--short"]) == 0
+    assert copied and copied[0].startswith("My agent tried")
+    assert "copied to clipboard (short report)" in capsys.readouterr().err
+
+
+def test_report_copy_falls_back_to_printing(caught, capsys, monkeypatch):
+    monkeypatch.setattr("biject_surject.clipboard.copy", lambda text: None)
+    assert main(["report", "last", "--copy"]) == 0
+    captured = capsys.readouterr()
+    assert "no clipboard tool found" in captured.err
+    assert captured.out.startswith("# Surject caught `write_file`")
+
+
+def test_report_last_with_nothing_caught(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert main(["report", "last"]) == 1
+    assert "nothing caught yet" in capsys.readouterr().err
+
+
+def test_report_copy_needs_an_id(caught, capsys):
+    assert main(["report", "--copy"]) == 2
