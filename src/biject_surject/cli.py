@@ -2,12 +2,14 @@
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from biject_surject import __version__
-from biject_surject.monitor import find_policy
+from biject_surject.monitor import POLICY_ENV, find_policy
 from biject_surject.policy import DEFAULT_POLICY_FILE, PolicyError, load_policy
 from biject_surject.reporter import STATE_DIR, render_markdown
 from biject_surject.templates import DEFAULT_POLICY
@@ -30,6 +32,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("validate", help="check a policy file for errors")
     p.add_argument("path", nargs="?", help="policy file (default: nearest surject.yaml)")
     p.set_defaults(func=cmd_validate)
+
+    p = sub.add_parser(
+        "watch", help="run an agent with Surject attached: surject watch -- python agent.py",
+    )
+    p.add_argument("--policy", help="policy file (default: nearest surject.yaml)")
+    p.add_argument("cmd", nargs=argparse.REMAINDER, help="the command that starts your agent")
+    p.set_defaults(func=cmd_watch)
 
     p = sub.add_parser("report", help="list caught violations, or print one report")
     p.add_argument("id", nargs="?", help="report id (or a unique prefix) to print")
@@ -83,6 +92,52 @@ def cmd_validate(args: argparse.Namespace) -> int:
     print(f"{path}: ok ({len(policy.tools)} tool rule(s), mode {policy.mode}, "
           f"unknown tools {policy.unknown_tools})")
     return 0
+
+
+BOOTSTRAP_DIR = Path(__file__).resolve().parent / "_bootstrap"
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    cmd = list(args.cmd)
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+    if not cmd:
+        _err("nothing to run; usage: surject watch -- python agent.py")
+        return 2
+
+    path = Path(args.policy) if args.policy else find_policy()
+    if path is None:
+        _err("no surject.yaml found here or in any parent folder (run `surject init`)")
+        return 1
+    try:
+        policy = load_policy(path)
+    except PolicyError as exc:
+        _err(str(exc))
+        return 1
+
+    env = dict(os.environ)
+    env["SURJECT_WATCH"] = "1"
+    env[POLICY_ENV] = str(path.resolve())
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (str(BOOTSTRAP_DIR), env.get("PYTHONPATH", "")) if p
+    )
+    print(f"[surject] watching ({policy.mode} mode, policy {path}); "
+          f"silent unless something breaks a rule", file=sys.stderr)
+
+    try:
+        proc = subprocess.Popen(cmd, env=env)
+    except FileNotFoundError:
+        _err(f"command not found: {cmd[0]}")
+        return 127
+    try:
+        return proc.wait()
+    except KeyboardInterrupt:
+        # The agent got the same Ctrl+C; give it a moment to exit cleanly.
+        try:
+            return proc.wait(timeout=10)
+        except (KeyboardInterrupt, subprocess.TimeoutExpired):
+            proc.kill()
+            return 130
 
 
 def cmd_report(args: argparse.Namespace) -> int:
