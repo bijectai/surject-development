@@ -83,7 +83,13 @@ paths:
   files**, so a wrong guess means an extra flag, never a miss.
 - `~` expands to the home folder; Windows drive paths match
   case-insensitively.
-- Shell commands (`Bash: {command: "cat .env"}`) are not parsed yet.
+- Shell commands count too: arguments named `command`, `cmd`, `script`, …
+  are split into words and each word is checked as a path, so
+  `cat .env` hits `protect`. For `read_only`, the *command* decides whether
+  files change (`rm`, `mv`, `cp`, `tee`, `sed -i`, `git reset`, output
+  redirects other than `2>&1` / `> /dev/null`, PowerShell `Remove-Item`, …).
+  This is a tokenizer, not a shell: paths built at runtime (`cat $F`) are
+  not resolved.
 - `surject init` ships with `protect` and `read_only` filled in, so a new
   user gets useful catches without knowing their tool names.
 

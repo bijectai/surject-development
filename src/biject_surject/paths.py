@@ -10,7 +10,8 @@ does: a wrong guess then means an extra flag, never a missed one.
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable, Iterator, Mapping, Tuple
+import shlex
+from typing import Any, Iterable, Iterator, List, Mapping, Tuple
 
 MAX_DEPTH = 4
 
@@ -97,3 +98,94 @@ def _strip_file_uri(value: str):
     if "://" in value:
         return None  # a URL, not a local path
     return value
+
+
+# --------------------------------------------------------------------------
+# Shell commands: `{"command": "cat .env"}` hides its paths inside a string.
+
+COMMAND_PARAM_NAMES = frozenset({
+    "command", "commands", "cmd", "script", "shell", "shell_command",
+    "bash_command", "commandline", "command_line",
+})
+
+# Programs that change files, and git subcommands that do.
+WRITE_COMMANDS = frozenset({
+    "rm", "rmdir", "unlink", "shred", "mv", "cp", "rsync", "scp", "install",
+    "touch", "mkdir", "tee", "truncate", "dd", "chmod", "chown", "chgrp",
+    "ln", "patch", "del", "erase", "rd", "move", "copy", "ren", "rename",
+    "remove-item", "move-item", "copy-item", "set-content", "out-file",
+    "new-item", "add-content", "clear-content",
+})
+WRITE_GIT = frozenset({"checkout", "reset", "clean", "commit", "push", "rm", "mv",
+                       "apply", "restore", "switch", "merge", "rebase", "stash", "gc"})
+IN_PLACE_FLAGS = ("sed", "perl", "ruby")  # with -i edit files in place
+
+_SEPARATORS = {";", "&&", "||", "|", "&", "(", ")", "{", "}"}
+_OUTPUT_REDIRECT = re.compile(r"(?<![<>=!-])\d*>>?(?!=)\s*(&?)([^\s;|&]*)")
+_NULL_TARGETS = {"/dev/null", "nul", "$null"}
+_REDIRECT = re.compile(r"^(?:\d*>>?|&>>?|<)")
+
+
+def _split(command: str) -> List[str]:
+    """shlex in POSIX mode eats backslashes, which mangles Windows paths, so
+    commands containing them are split in non-POSIX mode (quotes stripped)."""
+    posix = "\\" not in command
+    try:
+        raw = shlex.split(command, posix=posix)
+    except ValueError:
+        raw = command.split()
+    return raw if posix else [t.strip("\"'") for t in raw]
+
+
+def is_command_param(name: Any) -> bool:
+    return isinstance(name, str) and "_".join(words(name)) in COMMAND_PARAM_NAMES
+
+
+def command_tokens(command: str) -> List[str]:
+    """Words of a shell command that could be paths, with redirect targets
+    and `--opt=value` values split out. Tolerant of unbalanced quotes."""
+    raw = _split(command)
+    out: List[str] = []
+    for tok in raw:
+        tok = _REDIRECT.sub("", tok).strip(";|&()")
+        if not tok or tok in _SEPARATORS:
+            continue
+        if tok.startswith("-"):
+            if "=" not in tok:
+                continue
+            tok = tok.split("=", 1)[1]
+        out.append(tok)
+    return out
+
+
+def command_changes_files(command: str) -> bool:
+    for m in _OUTPUT_REDIRECT.finditer(command):
+        dup, target = m.groups()
+        if dup or target.lower() in _NULL_TARGETS:
+            continue  # 2>&1 or > /dev/null: no file is written
+        return True
+    raw = _split(command)
+    for i, tok in enumerate(raw):
+        name = tok.rsplit("/", 1)[-1].lower()
+        if name in WRITE_COMMANDS:
+            return True
+        if name == "git" and i + 1 < len(raw) and raw[i + 1] in WRITE_GIT:
+            return True
+        if name in IN_PLACE_FLAGS and any(t.startswith("-i") or t == "--in-place"
+                                          for t in raw[i + 1:i + 4]):
+            return True
+    return False
+
+
+def command_args(params: Mapping[str, Any]) -> Iterator[Tuple[str, str, str]]:
+    """Yield (label, top_level_param, command) for top-level command strings."""
+    if not isinstance(params, Mapping):
+        return
+    for key, value in params.items():
+        if is_command_param(key):
+            if isinstance(value, str):
+                yield str(key), str(key), value
+            elif isinstance(value, (list, tuple)):
+                strings = [v for v in value if isinstance(v, str)]
+                if strings:
+                    yield str(key), str(key), " ".join(shlex.quote(s) for s in strings)
