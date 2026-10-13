@@ -47,6 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("cmd", nargs=argparse.REMAINDER, help="the command that starts the MCP server")
     p.set_defaults(func=cmd_mcp)
 
+    p = sub.add_parser("hook", help="run as an agent hook: surject hook claude-code")
+    p.add_argument("agent", choices=["claude-code"], help="which agent is calling the hook")
+    p.add_argument("--policy", help="policy file (default: nearest surject.yaml to the agent's cwd)")
+    p.add_argument("--print-config", action="store_true",
+                   help="print the settings.json snippet that installs this hook, then exit")
+    p.set_defaults(func=cmd_hook)
+
     p = sub.add_parser("report", help="list caught violations, or print one report")
     p.add_argument("id", nargs="?", help="report id (or a unique prefix) to print")
     p.add_argument("-n", type=int, default=20, help="how many recent events to list")
@@ -175,6 +182,16 @@ def cmd_mcp(args: argparse.Namespace) -> int:
         return 127
     except KeyboardInterrupt:
         return 130
+
+
+def cmd_hook(args: argparse.Namespace) -> int:
+    from biject_surject.hooks import SETTINGS_SNIPPET, run_claude_code_hook
+
+    if args.print_config:
+        print("# Add to .claude/settings.json (project) or ~/.claude/settings.json (all projects):")
+        print(json.dumps(SETTINGS_SNIPPET, indent=2))
+        return 0
+    return run_claude_code_hook(sys.stdin, sys.stdout, args.policy)
 
 
 def cmd_report(args: argparse.Namespace) -> int:
