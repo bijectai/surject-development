@@ -1,0 +1,350 @@
+"""Loading and validating ``surject.yaml`` policies.
+
+The loader turns YAML into immutable dataclasses and compiles every regex
+and glob up front, so the checker never parses anything at call time.
+Every error names the exact location in the file that is wrong.
+"""
+
+from __future__ import annotations
+
+import posixpath
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Pattern, Tuple, Union
+
+import yaml
+
+DEFAULT_POLICY_FILE = "surject.yaml"
+
+MODES = ("monitor", "enforce")
+UNKNOWN_TOOL_ACTIONS = ("allow", "warn", "block")
+TYPE_NAMES = ("string", "integer", "number", "boolean", "array", "object", "null")
+
+_DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?\s*$")
+_DURATION_UNITS = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, "d": 86400, None: 1}
+
+
+class PolicyError(ValueError):
+    """Raised when a policy file is missing, malformed, or invalid."""
+
+    def __init__(self, message: str, where: str = ""):
+        self.where = where
+        super().__init__(f"{where}: {message}" if where else message)
+
+
+@dataclass(frozen=True)
+class RateLimit:
+    max: int
+    per: float  # seconds
+
+
+@dataclass(frozen=True)
+class Glob:
+    pattern: str
+    regex: Pattern[str]
+
+
+@dataclass(frozen=True)
+class ParamRule:
+    """Constraints on one tool parameter. Unset fields are not checked."""
+
+    required: bool = False
+    type: Optional[str] = None
+    equals: Any = None
+    has_equals: bool = False
+    one_of: Optional[Tuple[Any, ...]] = None
+    regex: Optional[Pattern[str]] = None
+    glob: Tuple[Glob, ...] = ()
+    not_glob: Tuple[Glob, ...] = ()
+    min: Optional[float] = None
+    max: Optional[float] = None
+    max_length: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class ToolRule:
+    blocked: bool = False
+    params: Mapping[str, ParamRule] = field(default_factory=dict)
+    rate_limit: Optional[RateLimit] = None
+
+
+@dataclass(frozen=True)
+class Policy:
+    version: int = 1
+    mode: str = "monitor"
+    unknown_tools: str = "warn"
+    tools: Mapping[str, ToolRule] = field(default_factory=dict)
+    rate_limit: Optional[RateLimit] = None
+    redact_names: Tuple[str, ...] = ()
+    redact_patterns: Tuple[Pattern[str], ...] = ()
+    source: Optional[str] = None
+    # Project root (the policy file's directory). Absolute paths under it are
+    # matched as if relative, so `./data/**` also catches `/abs/proj/data/x`.
+    root: Optional[str] = None
+
+
+# --------------------------------------------------------------------------
+# Public entry points
+
+
+def load_policy(path: Union[str, Path] = DEFAULT_POLICY_FILE) -> Policy:
+    path = Path(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise PolicyError(
+            f"no policy file at {path} (run `surject init` to create one)"
+        ) from None
+    return parse_policy(text, source=str(path), root=str(path.resolve().parent))
+
+
+def parse_policy(text: str, source: Optional[str] = None,
+                 root: Optional[str] = None) -> Policy:
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise PolicyError(f"invalid YAML: {exc}", source or "") from None
+    if data is None:
+        data = {}
+    return policy_from_dict(data, source=source, root=root)
+
+
+def policy_from_dict(data: Any, source: Optional[str] = None,
+                     root: Optional[str] = None) -> Policy:
+    _expect(data, dict, "policy")
+    _reject_unknown(data, {"version", "mode", "unknown_tools", "tools",
+                           "rate_limit", "redact"}, "policy")
+
+    version = data.get("version", 1)
+    if version != 1:
+        raise PolicyError(f"unsupported version {version!r} (expected 1)", "version")
+
+    mode = data.get("mode", "monitor")
+    _expect_choice(mode, MODES, "mode")
+
+    unknown = data.get("unknown_tools", "warn")
+    _expect_choice(unknown, UNKNOWN_TOOL_ACTIONS, "unknown_tools")
+
+    tools_raw = data.get("tools") or {}
+    _expect(tools_raw, dict, "tools")
+    tools = {
+        str(name): _parse_tool(spec, f"tools.{name}")
+        for name, spec in tools_raw.items()
+    }
+
+    rate = data.get("rate_limit")
+    rate_limit = _parse_rate_limit(rate, "rate_limit") if rate is not None else None
+
+    redact_names, redact_patterns = _parse_redact(data.get("redact"), "redact")
+
+    return Policy(
+        version=version,
+        mode=mode,
+        unknown_tools=unknown,
+        tools=tools,
+        rate_limit=rate_limit,
+        redact_names=redact_names,
+        redact_patterns=redact_patterns,
+        source=source,
+        root=normalize_path(root) if root else None,
+    )
+
+
+def normalize_path(value: str, root: Optional[str] = None) -> str:
+    """Normalize a path for glob matching: forward slashes, no ``.``/``..``
+    segments, no leading ``./``. If ``root`` is given and the path is an
+    absolute path inside it, return it relative to ``root``. Pure string
+    work; never touches the disk."""
+    norm = posixpath.normpath(value.replace("\\", "/"))
+    if norm == ".":
+        return ""
+    if root:
+        root = posixpath.normpath(root.replace("\\", "/")).rstrip("/")
+        # Windows drive paths are case-insensitive.
+        fold = _DRIVE_RE.match(root) is not None
+        a, b = (norm.casefold(), root.casefold()) if fold else (norm, root)
+        if a == b:
+            return ""
+        if a.startswith(b + "/"):
+            return norm[len(root) + 1:]
+    return norm
+
+
+_DRIVE_RE = re.compile(r"^[A-Za-z]:/")
+
+
+def compile_glob(pattern: str) -> Glob:
+    """``**`` matches across directories, ``*`` and ``?`` stay within one."""
+    norm = normalize_path(pattern)
+    out = []
+    i = 0
+    while i < len(norm):
+        c = norm[i]
+        if norm.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif norm.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif c == "*":
+            out.append("[^/]*")
+            i += 1
+        elif c == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(c))
+            i += 1
+    return Glob(pattern=pattern, regex=re.compile("^" + "".join(out) + "$"))
+
+
+def parse_duration(value: Any, where: str) -> float:
+    if isinstance(value, bool):
+        raise PolicyError("expected a duration like 60s, 5m or 1h", where)
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+    elif isinstance(value, str) and _DURATION_RE.match(value):
+        num, unit = _DURATION_RE.match(value).groups()
+        seconds = float(num) * _DURATION_UNITS[unit]
+    else:
+        raise PolicyError(f"expected a duration like 60s, 5m or 1h, got {value!r}", where)
+    if seconds <= 0:
+        raise PolicyError("duration must be positive", where)
+    return seconds
+
+
+# --------------------------------------------------------------------------
+# Section parsers
+
+
+def _parse_tool(spec: Any, where: str) -> ToolRule:
+    if spec is None or spec == "allow":
+        return ToolRule()
+    if spec == "block":
+        return ToolRule(blocked=True)
+    if not isinstance(spec, dict):
+        raise PolicyError("expected allow, block, or a mapping with params/rate_limit", where)
+    _reject_unknown(spec, {"params", "rate_limit"}, where)
+
+    params_raw = spec.get("params") or {}
+    _expect(params_raw, dict, f"{where}.params")
+    params = {
+        str(name): _parse_param(rule, f"{where}.params.{name}")
+        for name, rule in params_raw.items()
+    }
+    rate = spec.get("rate_limit")
+    rate_limit = _parse_rate_limit(rate, f"{where}.rate_limit") if rate is not None else None
+    return ToolRule(params=params, rate_limit=rate_limit)
+
+
+_PARAM_KEYS = {"required", "type", "equals", "one_of", "regex", "glob",
+               "not_glob", "min", "max", "max_length"}
+
+
+def _parse_param(rule: Any, where: str) -> ParamRule:
+    _expect(rule, dict, where)
+    _reject_unknown(rule, _PARAM_KEYS, where)
+    kw: Dict[str, Any] = {}
+
+    if "required" in rule:
+        _expect(rule["required"], bool, f"{where}.required")
+        kw["required"] = rule["required"]
+    if "type" in rule:
+        _expect_choice(rule["type"], TYPE_NAMES, f"{where}.type")
+        kw["type"] = rule["type"]
+    if "equals" in rule:
+        kw["equals"] = rule["equals"]
+        kw["has_equals"] = True
+    if "one_of" in rule:
+        _expect(rule["one_of"], list, f"{where}.one_of")
+        kw["one_of"] = tuple(rule["one_of"])
+    if "regex" in rule:
+        kw["regex"] = _compile_regex(rule["regex"], f"{where}.regex")
+    for key in ("glob", "not_glob"):
+        if key in rule:
+            kw[key] = tuple(
+                compile_glob(p)
+                for p in _string_list(rule[key], f"{where}.{key}")
+            )
+    for key in ("min", "max"):
+        if key in rule:
+            val = rule[key]
+            if isinstance(val, bool) or not isinstance(val, (int, float)):
+                raise PolicyError("expected a number", f"{where}.{key}")
+            kw[key] = val
+    if "max_length" in rule:
+        val = rule["max_length"]
+        if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+            raise PolicyError("expected a non-negative integer", f"{where}.max_length")
+        kw["max_length"] = val
+
+    if kw.get("min") is not None and kw.get("max") is not None and kw["min"] > kw["max"]:
+        raise PolicyError("min is greater than max", where)
+    return ParamRule(**kw)
+
+
+def _parse_rate_limit(spec: Any, where: str) -> RateLimit:
+    _expect(spec, dict, where)
+    _reject_unknown(spec, {"max", "per"}, where)
+    if "max" not in spec or "per" not in spec:
+        raise PolicyError("needs both max and per, e.g. { max: 30, per: 60s }", where)
+    mx = spec["max"]
+    if isinstance(mx, bool) or not isinstance(mx, int) or mx < 1:
+        raise PolicyError("max must be a positive integer", f"{where}.max")
+    return RateLimit(max=mx, per=parse_duration(spec["per"], f"{where}.per"))
+
+
+def _parse_redact(spec: Any, where: str) -> Tuple[Tuple[str, ...], Tuple[Pattern[str], ...]]:
+    if spec is None:
+        return (), ()
+    _expect(spec, dict, where)
+    _reject_unknown(spec, {"names", "patterns"}, where)
+    names = tuple(n.lower() for n in _string_list(spec.get("names", []), f"{where}.names"))
+    patterns = tuple(
+        _compile_regex(p, f"{where}.patterns[{i}]")
+        for i, p in enumerate(_string_list(spec.get("patterns", []), f"{where}.patterns"))
+    )
+    return names, patterns
+
+
+# --------------------------------------------------------------------------
+# Small validation helpers
+
+_TYPE_LABELS = {dict: "a mapping", list: "a list", bool: "true or false", str: "a string"}
+
+
+def _expect(value: Any, typ: type, where: str) -> None:
+    if not isinstance(value, typ):
+        raise PolicyError(f"expected {_TYPE_LABELS.get(typ, typ.__name__)}", where)
+
+
+def _expect_choice(value: Any, choices: Tuple[str, ...], where: str) -> None:
+    if value not in choices:
+        raise PolicyError(f"expected one of {', '.join(choices)}, got {value!r}", where)
+
+
+def _reject_unknown(mapping: Dict[Any, Any], allowed: set, where: str) -> None:
+    extra = sorted(str(k) for k in mapping if k not in allowed)
+    if extra:
+        raise PolicyError(
+            f"unknown key(s) {', '.join(extra)} (allowed: {', '.join(sorted(allowed))})",
+            where,
+        )
+
+
+def _string_list(value: Any, where: str) -> List[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return list(value)
+    raise PolicyError("expected a string or a list of strings", where)
+
+
+def _compile_regex(value: Any, where: str) -> Pattern[str]:
+    if not isinstance(value, str):
+        raise PolicyError("expected a regular expression string", where)
+    try:
+        return re.compile(value)
+    except re.error as exc:
+        raise PolicyError(f"invalid regular expression: {exc}", where) from None
