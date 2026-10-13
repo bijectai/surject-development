@@ -6,6 +6,8 @@ speaks when something is wrong.
 
 > **Status:** early development, not yet released beyond a placeholder.
 
+**Docs:** [getting started and guides](docs/README.md) · [policy reference](docs/policy.md) · [reports and sharing](docs/reports.md)
+
 ## Quickstart
 
 ```bash
