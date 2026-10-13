@@ -61,6 +61,32 @@ report readable without context.
 
 `surject init` writes this file with every option commented.
 
+## Path rules (any tool)
+
+Tool names differ across frameworks (`write_file`, `Write`, `fs_write`,
+`save`), so rules keyed by tool name miss most real agents. The `paths:`
+section applies to **every** tool:
+
+```yaml
+paths:
+  protect: ["**/.env", "**/*.pem", "~/.ssh/**"]   # no tool may touch these
+  read_only: ["./.git/**", "./data/raw/**"]       # readable, not changeable
+  params: [notebook]                              # extra path argument names
+```
+
+- Path arguments are found by **name** (`path`, `file_path`, `filename`,
+  `dest`, `*_path`, `*_dir`, …), including nested ones (`edits[0].path`).
+  `file://` URIs count; `http(s)://` URLs don't.
+- `read_only` needs to know whether a tool changes files. Surject guesses
+  from the tool's name (`write`, `edit`, `delete`, `move`, `patch`, … vs.
+  `read`, `list`, `search`, …). **An unclear name counts as changing
+  files**, so a wrong guess means an extra flag, never a miss.
+- `~` expands to the home folder; Windows drive paths match
+  case-insensitively.
+- Shell commands (`Bash: {command: "cat .env"}`) are not parsed yet.
+- `surject init` ships with `protect` and `read_only` filled in, so a new
+  user gets useful catches without knowing their tool names.
+
 ## How `surject watch` attaches (the big decision)
 
 "Attach to the agent's runtime" has no single universal mechanism. Options:

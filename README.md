@@ -19,8 +19,8 @@ allow, Surject says so:
 
 ```
 [surject] FLAGGED write_file (monitor mode, call allowed)
-  rule    tools.write_file.params.path.not_glob[0]
-  why     'path' must not be inside ./data/raw/**
+  rule    paths.read_only[1]
+  why     'path' is inside ./data/raw/**, which is read-only, and 'write_file' looks like it changes files
   params  {"path": "data/raw/experiment_07.csv", "content": "overwritten"}
   report  .surject/reports/20261013T215433018Z-write_file.md
 ```
@@ -81,10 +81,12 @@ permission flow continues.
 ```yaml
 mode: monitor          # or enforce: block the call instead of just flagging it
 unknown_tools: allow   # or warn / block for tools not listed below
-tools:
-  write_file:
-    params:
-      path: { not_glob: ["./data/raw/**", "**/.env"] }
+
+paths:                 # applies to every tool, whatever it's called
+  protect: ["**/.env", "**/*.pem", "~/.ssh/**"]   # no tool may touch these
+  read_only: ["./.git/**", "./data/raw/**"]       # readable, not changeable
+
+tools:                 # rules for specific tools by name
   http_get:
     params:
       url: { regex: "^https://api\\.example\\.com/" }
