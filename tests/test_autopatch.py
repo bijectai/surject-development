@@ -129,8 +129,6 @@ def test_nested_calls_are_reported_once(monitor):
         async def arun(self, tool_input, **kw):  # like langchain-mcp-adapters
             return await session.call_tool(self.name, tool_input)
 
-    # re-patch so the subclass override is wrapped the way BaseTool's is
-    autopatch._patch_langchain(types.SimpleNamespace(BaseTool=McpBackedTool))
     asyncio.run(McpBackedTool("rm").arun({"path": "x"}))
     assert len(flagged(monitor)) == 1
 
@@ -308,3 +306,52 @@ def test_watch_requires_policy_and_command(tmp_path):
     r = subprocess.run([sys.executable, "-m", "biject_surject", "watch"],
                        cwd=tmp_path, capture_output=True, text=True)
     assert r.returncode == 2 and "nothing to run" in r.stderr
+
+
+def test_subclass_overrides_are_patched_existing_and_future(monitor):
+    class BaseTool:
+        name = "rm"
+
+        def run(self, *args, **kwargs):
+            return "base"
+
+    class Existing(BaseTool):  # defined before patching, overrides run
+        def run(self, *args, **kwargs):
+            return "existing"
+
+    autopatch._patch_crewai_base(types.SimpleNamespace(BaseTool=BaseTool))
+
+    class Later(BaseTool):  # defined after patching
+        def run(self, *args, **kwargs):
+            return "later:" + super().run(*args, **kwargs)
+
+    class Inherits(BaseTool):  # no override: uses the patched base
+        pass
+
+    assert Existing().run(path="x") == "existing"
+    assert Later().run(path="x") == "later:base"  # super() call checked once
+    assert Inherits().run(path="x") == "base"
+    assert len(flagged(monitor)) == 3
+
+
+def test_subclass_hook_preserves_existing_init_subclass(monitor):
+    seen = []
+
+    class BaseTool:
+        name = "rm"
+
+        def __init_subclass__(cls, **kw):
+            seen.append(cls.__name__)
+
+        def run(self, tool_input=None, **kw):
+            return "ran"
+
+    autopatch._patch_langchain(types.SimpleNamespace(BaseTool=BaseTool))
+
+    class Mine(BaseTool):
+        def run(self, tool_input=None, **kw):
+            return "mine"
+
+    assert seen == ["Mine"]
+    assert Mine().run({"path": "x"}) == "mine"
+    assert len(flagged(monitor)) == 1

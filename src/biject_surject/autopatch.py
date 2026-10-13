@@ -98,88 +98,126 @@ def _guarded(obj: Any, attr: str) -> bool:
 
 
 # --------------------------------------------------------------------------
+# Patching a method across a class hierarchy. Frameworks often override the
+# entry point in subclasses (crewai's `Tool.run`), so patching only the base
+# class misses calls. We patch the base, every existing subclass that defines
+# the method, and every subclass created later (via __init_subclass__).
+# Nested calls (a subclass calling super().run) are checked once thanks to
+# the `_inside` guard.
+
+WrapperFactory = Callable[[Callable[..., Any]], Callable[..., Any]]
+
+
+def _patch_tree(base: type, name: str, make: WrapperFactory) -> None:
+    def patch_one(cls: type) -> None:
+        orig = cls.__dict__.get(name)
+        if callable(orig) and not getattr(orig, "__surject_guarded__", False):
+            setattr(cls, name, _mark(functools.wraps(orig)(make(orig))))
+
+    seen = set()
+
+    def walk(cls: type) -> None:
+        if cls in seen:
+            return
+        seen.add(cls)
+        patch_one(cls)
+        for sub in cls.__subclasses__():
+            walk(sub)
+
+    walk(base)
+    _hook_future_subclasses(base, name, patch_one)
+
+
+def _hook_future_subclasses(base: type, name: str, patch_one: Callable[[type], None]) -> None:
+    hooks = base.__dict__.get("__surject_subclass_hooks__")
+    if hooks is not None:
+        if name not in hooks:
+            hooks[name] = patch_one
+        return
+    hooks = {name: patch_one}
+    own = base.__dict__.get("__init_subclass__")
+
+    def __init_subclass__(cls, **kwargs):
+        if own is not None:
+            fn = own.__func__ if isinstance(own, classmethod) else own
+            fn(cls, **kwargs)
+        else:
+            super(base, cls).__init_subclass__(**kwargs)
+        for hook in list(hooks.values()):
+            try:
+                hook(cls)
+            except Exception:
+                pass
+
+    base.__init_subclass__ = classmethod(__init_subclass__)  # type: ignore[assignment]
+    base.__surject_subclass_hooks__ = hooks  # type: ignore[attr-defined]
+
+
+def _sync_input_tool(orig):
+    """run/invoke(self, tool_input, ...) style entry points."""
+    def wrapper(self, tool_input=None, *args, **kwargs):
+        return _check_sync(self.name, lambda: _input_to_params(tool_input),
+                           lambda: orig(self, tool_input, *args, **kwargs))
+    return wrapper
+
+
+def _async_input_tool(orig):
+    async def wrapper(self, tool_input=None, *args, **kwargs):
+        return await _check_async(self.name, lambda: _input_to_params(tool_input),
+                                  lambda: orig(self, tool_input, *args, **kwargs))
+    return wrapper
+
+
+def _sync_kwargs_tool(orig):
+    """run(self, *args, **kwargs) style entry points (CrewAI BaseTool)."""
+    def wrapper(self, *args, **kwargs):
+        params = lambda: {**{f"arg{i}": a for i, a in enumerate(args)}, **kwargs}
+        return _check_sync(self.name, params, lambda: orig(self, *args, **kwargs))
+    return wrapper
+
+
+def _async_kwargs_tool(orig):
+    async def wrapper(self, *args, **kwargs):
+        params = lambda: {**{f"arg{i}": a for i, a in enumerate(args)}, **kwargs}
+        return await _check_async(self.name, params, lambda: orig(self, *args, **kwargs))
+    return wrapper
+
+
+# --------------------------------------------------------------------------
 # Framework patches. Each takes the freshly imported module.
 
 
 def _patch_langchain(mod: Any) -> None:
-    tool = mod.BaseTool
-    if not _guarded(tool, "run"):
-        orig_run = tool.run
-
-        @functools.wraps(orig_run)
-        def run(self, tool_input, *args, **kwargs):
-            return _check_sync(self.name, lambda: _input_to_params(tool_input),
-                               lambda: orig_run(self, tool_input, *args, **kwargs))
-        tool.run = _mark(run)
-
-    if not _guarded(tool, "arun"):
-        orig_arun = tool.arun
-
-        @functools.wraps(orig_arun)
-        async def arun(self, tool_input, *args, **kwargs):
-            return await _check_async(self.name, lambda: _input_to_params(tool_input),
-                                      lambda: orig_arun(self, tool_input, *args, **kwargs))
-        tool.arun = _mark(arun)
+    _patch_tree(mod.BaseTool, "run", _sync_input_tool)
+    _patch_tree(mod.BaseTool, "arun", _async_input_tool)
 
 
 def _patch_mcp(mod: Any) -> None:
-    session = mod.ClientSession
-    if _guarded(session, "call_tool"):
-        return
-    orig = session.call_tool
-
-    @functools.wraps(orig)
-    async def call_tool(self, name, arguments=None, *args, **kwargs):
-        return await _check_async(name, lambda: arguments or {},
-                                  lambda: orig(self, name, arguments, *args, **kwargs))
-    session.call_tool = _mark(call_tool)
+    def make(orig):
+        async def call_tool(self, name, arguments=None, *args, **kwargs):
+            return await _check_async(name, lambda: arguments or {},
+                                      lambda: orig(self, name, arguments, *args, **kwargs))
+        return call_tool
+    _patch_tree(mod.ClientSession, "call_tool", make)
 
 
 def _patch_crewai_base(mod: Any) -> None:
-    tool = mod.BaseTool
-    if _guarded(tool, "run"):
-        return
-    orig = tool.run
-
-    @functools.wraps(orig)
-    def run(self, *args, **kwargs):
-        params = lambda: {**{f"arg{i}": a for i, a in enumerate(args)}, **kwargs}
-        return _check_sync(self.name, params, lambda: orig(self, *args, **kwargs))
-    tool.run = _mark(run)
+    _patch_tree(mod.BaseTool, "run", _sync_kwargs_tool)
+    _patch_tree(mod.BaseTool, "arun", _async_kwargs_tool)
 
 
 def _patch_crewai_structured(mod: Any) -> None:
-    tool = mod.CrewStructuredTool
-    if not _guarded(tool, "invoke"):
-        orig = tool.invoke
-
-        @functools.wraps(orig)
-        def invoke(self, input, *args, **kwargs):
-            return _check_sync(self.name, lambda: _input_to_params(input),
-                               lambda: orig(self, input, *args, **kwargs))
-        tool.invoke = _mark(invoke)
-
-    if hasattr(tool, "ainvoke") and not _guarded(tool, "ainvoke"):
-        orig_a = tool.ainvoke
-
-        @functools.wraps(orig_a)
-        async def ainvoke(self, input, *args, **kwargs):
-            return await _check_async(self.name, lambda: _input_to_params(input),
-                                      lambda: orig_a(self, input, *args, **kwargs))
-        tool.ainvoke = _mark(ainvoke)
+    _patch_tree(mod.CrewStructuredTool, "invoke", _sync_input_tool)
+    _patch_tree(mod.CrewStructuredTool, "ainvoke", _async_input_tool)
 
 
 def _patch_autogen(mod: Any) -> None:
-    tool = mod.BaseTool
-    if _guarded(tool, "run_json"):
-        return
-    orig = tool.run_json
-
-    @functools.wraps(orig)
-    async def run_json(self, args, *rest, **kwargs):
-        return await _check_async(self.name, lambda: args,
-                                  lambda: orig(self, args, *rest, **kwargs))
-    tool.run_json = _mark(run_json)
+    def make(orig):
+        async def run_json(self, args, *rest, **kwargs):
+            return await _check_async(self.name, lambda: args,
+                                      lambda: orig(self, args, *rest, **kwargs))
+        return run_json
+    _patch_tree(mod.BaseTool, "run_json", make)
 
 
 def _patch_openai_agents(mod: Any) -> None:

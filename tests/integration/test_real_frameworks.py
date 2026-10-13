@@ -76,11 +76,30 @@ def test_langchain_tool_call_message(monitor):
 
 def test_mcp_client(monitor):
     pytest.importorskip("mcp")
-    from mcp import Client
-    from mcp.server.mcpserver import MCPServer
-
-    server = MCPServer("files")
     written = []
+
+    try:  # mcp >= 2
+        from mcp import Client
+        from mcp.server.mcpserver import MCPServer
+
+        server = MCPServer("files")
+
+        def connect():
+            return Client(server)
+
+        async def call(client, name, args):
+            return await client.call_tool(name, args)
+    except ImportError:  # mcp 1.x
+        from mcp.server.fastmcp import FastMCP
+        from mcp.shared.memory import create_connected_server_and_client_session
+
+        server = FastMCP("files")
+
+        def connect():
+            return create_connected_server_and_client_session(server._mcp_server)
+
+        async def call(session, name, args):
+            return await session.call_tool(name, args)
 
     @server.tool()
     def write_file(path: str) -> str:
@@ -88,10 +107,10 @@ def test_mcp_client(monitor):
         return "ok"
 
     async def main():
-        async with Client(server) as client:
-            await client.call_tool("write_file", {"path": "out/a.csv"})
+        async with connect() as client:
+            await call(client, "write_file", {"path": "out/a.csv"})
             with pytest.raises(surject.PolicyViolation):
-                await client.call_tool("write_file", {"path": "data/raw/a.csv"})
+                await call(client, "write_file", {"path": "data/raw/a.csv"})
 
     asyncio.run(main())
     assert written == ["out/a.csv"]
