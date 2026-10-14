@@ -113,7 +113,8 @@ def test_extra_param_names():
 def test_each_hit_reported_once_per_argument():
     v = run("write_file", {"path": "x/.env", "backup_path": "y/.env"})
     assert rules(v) == ["paths.protect[0]", "paths.protect[0]"]
-    assert [x.message.split("'")[1] for x in v.violations] == ["path", "backup_path"]
+    # arguments are walked in sorted key order, whatever order they arrived in
+    assert [x.message.split("'")[1] for x in v.violations] == ["backup_path", "path"]
 
 
 def test_blocked_tool_reports_only_the_block():

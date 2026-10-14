@@ -239,6 +239,10 @@ in policy order, constraints in listed order), then 2.3, then 2.4.
 ## 4. Finding paths, commands and intent
 
 ### 4.1 Path arguments
+**Key order.** At every level, object keys are visited in ascending
+Unicode code-point order, never in the order the JSON arrived in (JSON
+objects are unordered, and libraries differ).
+
 Walk `R.params`. For each top-level key `k` with value `x`: visit
 `(x, label=k, top=k, is_path=is_path_param(k), depth=0)`. Visiting:
 
@@ -271,8 +275,8 @@ meets `vocabulary.write_words`; otherwise false if `W` meets
 `vocabulary.read_words`; **otherwise true**.
 
 ### 4.4 Commands
-Command arguments are top-level keys only, where `words(k)` joined with
-`_` is in `vocabulary.command_param_names`. A string value is the command.
+Command arguments are top-level keys only (in key order, 4.1), where
+`words(k)` joined with `_` is in `vocabulary.command_param_names`. A string value is the command.
 An array value uses its string elements, each POSIX-shell-quoted and
 joined with spaces; other values are ignored.
 
