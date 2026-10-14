@@ -215,16 +215,21 @@ in policy order, constraints in listed order), then 2.3, then 2.4.
 1. **Home:** if `value` is exactly `~`, or starts with `~/` or `~\`,
    replace the `~` with `R.home`. (`~user` is not expanded.)
 2. **Separators:** replace every `\` with `/`.
-3. **Segments:** POSIX `normpath`:
-   - Keep a leading `/`; keep exactly two leading slashes if there are
-     exactly two (`//server/share`); collapse three or more to one.
+3. **Relative to the project:** if `P.root` is set and the value doesn't
+   start with `/` or a drive (`[A-Za-z]:/`), prefix it with the root
+   (trailing `/` removed) and a `/`. Relative paths are taken as relative
+   to the project, so `../proj/data/x` and `../.ssh/id_rsa` resolve to
+   what they actually point at.
+4. **Segments:** POSIX `normpath`:
+   - Collapse any run of leading slashes to one (`//etc/passwd` is
+     `/etc/passwd`).
    - Split the rest on `/`. Drop empty and `.` segments. A `..` removes
      the previous segment if there is one and it isn't `..`; at the start
      of an absolute path it is dropped; at the start of a relative path it
      is kept.
-   - If nothing is left: `/` (or `//`) for absolute paths, and the empty
-     string for relative paths.
-4. **Root-relative:** if `P.root` is set (already normalized; a root of
+   - If nothing is left: `/` for absolute paths, and the empty string for
+     relative paths.
+5. **Root-relative:** if `P.root` is set (already normalized; a root of
    `/` never applies), let `a`,
    `b` = the value and the root, both case-folded if the root starts with
    a drive (`[A-Za-z]:/`). If `a == b`, the result is the empty string; if
@@ -237,7 +242,7 @@ in policy order, constraints in listed order), then 2.3, then 2.4.
 Walk `R.params`. For each top-level key `k` with value `x`: visit
 `(x, label=k, top=k, is_path=is_path_param(k), depth=0)`. Visiting:
 
-- depth > 4: stop.
+- depth > 8: stop.
 - string: if `is_path`, yield it after URI handling. Values starting with
   `file://` have that prefix removed; any other value containing `://` is
   skipped.
@@ -250,8 +255,9 @@ Walk `R.params`. For each top-level key `k` with value `x`: visit
 
 `is_path_param(name)`: let `s` = words(name) joined with `_` (4.2). True
 if `s` is in `vocabulary.path_param_names`, ends with any of
-`vocabulary.path_param_suffixes`, or `name` or `s` is in
-`P.paths.extra_params`.
+`vocabulary.path_param_suffixes`, or equals words(e) joined with `_` for
+some `e` in `P.paths.extra_params` (so `weirdArg` and `weird_arg` are the
+same name).
 
 ### 4.2 Words
 `words(name)`: split `name` on runs of non-ASCII-alphanumerics; in each

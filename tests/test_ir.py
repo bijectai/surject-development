@@ -178,3 +178,37 @@ def test_integer_is_by_value():
 def test_home_expansion(value, hit):
     p = parse_policy("paths: {protect: ['~/.ssh/**']}\nunknown_tools: allow", home=HOME)
     assert (not check(p, ToolCall("Read", {"path": value}), home=HOME).ok) is hit
+
+
+# -- bypasses found while reviewing the conformance vectors ------------------
+
+
+@pytest.mark.parametrize("value", ["../proj/data/x", "x/../../proj/data/y"])
+def test_relative_paths_that_re_enter_the_project_are_caught(value):
+    p = parse_policy("paths: {protect: ['./data/**']}\nunknown_tools: allow", root=ROOT, home=HOME)
+    assert not check(p, ToolCall("Read", {"path": value}), home=HOME).ok
+
+
+def test_relative_paths_that_leave_the_project_hit_absolute_rules():
+    p = parse_policy("paths: {protect: ['~/.ssh/**']}\nunknown_tools: allow", root=ROOT, home=HOME)
+    assert not check(p, ToolCall("Read", {"path": "../.ssh/id_rsa"}), home=HOME).ok
+    assert not check(p, ToolCall("Bash", {"command": "cat ../.ssh/id_rsa"}), home=HOME).ok
+
+
+@pytest.mark.parametrize("value", ["//etc/passwd", "///etc/passwd", "//etc//passwd"])
+def test_leading_double_slash_does_not_dodge_absolute_rules(value):
+    p = parse_policy("paths: {protect: ['/etc/**']}\nunknown_tools: allow", root=ROOT)
+    assert not check(p, ToolCall("Read", {"path": value})).ok
+
+
+def test_extra_param_names_match_in_any_case_style():
+    for extra, arg in [("weirdArg", "weird_arg"), ("weird_arg", "weirdArg"), ("WeirdArg", "weirdarg")]:
+        p = parse_policy(f"paths: {{protect: ['**/.env'], params: [{extra}]}}\nunknown_tools: allow")
+        v = check(p, ToolCall("t", {arg: ".env"}))
+        assert not v.ok or arg == "weirdarg"  # "weirdarg" is one word, not weird+arg
+
+
+def test_deeply_nested_paths_are_found():
+    p = parse_policy("paths: {protect: ['**/.env']}\nunknown_tools: allow")
+    params = {"a": {"b": {"c": {"d": {"e": {"f": {"path": ".env"}}}}}}}
+    assert not check(p, ToolCall("t", params)).ok

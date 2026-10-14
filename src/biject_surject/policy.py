@@ -180,15 +180,22 @@ def normalize_path(value: str, root: Optional[str] = None,
                    home: Optional[str] = None) -> str:
     """Normalize a path for matching, exactly as docs/KERNEL.md section 3:
     expand a leading ``~`` (not ``~user``) to ``home``; forward slashes;
-    POSIX normpath; no leading ``./``; and if ``root`` is given and the path
-    is inside it, make it relative to ``root``. Never touches the disk."""
+    resolve relative paths against ``root``; POSIX normpath with leading
+    slashes collapsed to one; and if the result is inside ``root``, make it
+    relative to ``root``. Never touches the disk."""
     if value == "~" or value.startswith(("~/", "~\\")):
         value = (home if home is not None else os.path.expanduser("~")) + value[1:]
-    norm = posixpath.normpath(value.replace("\\", "/"))
+    value = value.replace("\\", "/")
+    if root is not None:
+        root = _normpath(root.replace("\\", "/")).rstrip("/")
+        # Relative paths are relative to the project, so `../proj/data/x`
+        # and `../.ssh/id_rsa` resolve to what they really point at.
+        if not (value.startswith("/") or _DRIVE_RE.match(value)):
+            value = (root or "") + "/" + value
+    norm = _normpath(value)
     if norm == ".":
         return ""
     if root:
-        root = posixpath.normpath(root.replace("\\", "/")).rstrip("/")
         # Windows drive paths are case-insensitive.
         fold = _DRIVE_RE.match(root) is not None
         a, b = (norm.casefold(), root.casefold()) if fold else (norm, root)
@@ -197,6 +204,13 @@ def normalize_path(value: str, root: Optional[str] = None,
         if a.startswith(b + "/"):
             return norm[len(root) + 1:]
     return norm
+
+
+def _normpath(value: str) -> str:
+    """posixpath.normpath, but `//x` becomes `/x`: on POSIX systems they're
+    the same file, so keeping `//` would let `//etc/passwd` dodge `/etc/**`."""
+    norm = posixpath.normpath(value)
+    return "/" + norm.lstrip("/") if norm.startswith("//") else norm
 
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:/")

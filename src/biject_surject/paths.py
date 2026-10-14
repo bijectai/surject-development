@@ -13,7 +13,7 @@ import re
 import shlex
 from typing import Any, Iterable, Iterator, List, Mapping, Tuple
 
-MAX_DEPTH = 4
+MAX_DEPTH = 8
 
 PATH_PARAM_NAMES = frozenset({
     "path", "paths", "file", "files", "filepath", "file_path", "file_paths",
@@ -63,7 +63,7 @@ def is_path_param(name: Any, extra: Iterable[str] = ()) -> bool:
         return False
     snake = "_".join(words(name))
     return (snake in PATH_PARAM_NAMES or snake.endswith(PATH_PARAM_SUFFIXES)
-            or name in extra or snake in extra)
+            or snake in {"_".join(words(e)) for e in extra})
 
 
 def path_args(params: Mapping[str, Any], extra: Iterable[str] = ()) -> Iterator[Tuple[str, str, str]]:
