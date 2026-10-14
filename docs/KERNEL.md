@@ -356,8 +356,11 @@ The word lists in `policy.vocabulary`. The reference values are in
 ## 7. Talking to an external checker
 
 An external checker (the Lean kernel) is a program that reads and writes
-**one JSON object per line** on stdin and stdout. Surject starts it once
-and keeps it running.
+**one JSON object per line** on stdin and stdout. Surject starts it once,
+on the first call, and keeps it running. It's selected by `checker: lean`
+in the policy; the command comes from the `SURJECT_KERNEL` environment
+variable (split like a shell command line), default `surject-kernel`.
+`tests/fake_kernel.py` is a small working example of the protocol.
 
 ```
 → {"type": "hello", "contract": 1}
