@@ -39,6 +39,19 @@ redact:
 If Surject itself fails while checking, monitor mode lets the call run and
 enforce mode blocks it.
 
+## `checker`
+
+Which checker decides each call.
+
+| Value | Meaning |
+|---|---|
+| `python` (default) | The built-in Python reference checker. |
+| `lean` | An external verified checker (the biject Lean kernel), started from the `SURJECT_KERNEL` command (default `surject-kernel`). Verdicts record which checker made them. |
+
+If the external checker can't be reached or misbehaves, monitor mode warns
+once and falls back to the Python checker; enforce mode blocks the call.
+The contract every checker implements is in [KERNEL.md](KERNEL.md).
+
 ## `unknown_tools`
 
 What to do with tools not listed under `tools:`.

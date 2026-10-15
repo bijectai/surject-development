@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+from dataclasses import replace
 import os
 import sys
 import threading
@@ -54,6 +55,11 @@ class Monitor:
         )
         self.history = History()
         self._lock = threading.Lock()
+        self._external = None
+        self._warned_fallback = False
+        if self.policy.checker == "lean":
+            from biject_surject.kernel import ExternalChecker
+            self._external = ExternalChecker(self.policy)
 
     @classmethod
     def from_file(cls, path: Union[str, Path] = DEFAULT_POLICY_FILE) -> "Monitor":
@@ -67,12 +73,40 @@ class Monitor:
         call = ToolCall(name=name, params=dict(params or {}), timestamp=time.time())
         try:
             with self._lock:
-                verdict = _check(self.policy, call, self.history)
+                verdict = self._decide(call)
                 self.history.record(call)
             self.reporter.report(verdict)
             return verdict
         except Exception as exc:  # internal failure
             return self._internal_error(call, exc)
+
+    def _decide(self, call: ToolCall) -> Verdict:
+        """Ask the configured checker. If an external checker (the Lean
+        kernel) fails: monitor mode falls back to the Python reference with
+        one warning; enforce mode blocks the call (docs/KERNEL.md section 7)."""
+        if self._external is None:
+            return _check(self.policy, call, self.history)
+        from biject_surject.kernel import KernelError
+        reference = _check(self.policy, call, self.history)
+        try:
+            verdict = self._external.check(call, self.history)
+        except KernelError as exc:
+            reason = self.redactor.text(str(exc))
+            if self.policy.mode == "enforce":
+                return Verdict(call=call, decision=BLOCK, mode=self.policy.mode,
+                               checker="surject.kernel_unavailable",
+                               violations=(Violation("surject.kernel_unavailable",
+                                                     f"the kernel could not check this call ({reason})"),))
+            if not self._warned_fallback:
+                self._warned_fallback = True
+                _warn(f"kernel unavailable ({reason}); using the Python reference "
+                      f"checker (monitor mode)")
+            return reference
+        # The kernel may omit messages; borrow the reference checker's wording.
+        wording = {(v.rule, v.label): v.message for v in reference.violations}
+        return replace(verdict, violations=tuple(
+            replace(v, message=wording.get((v.rule, v.label), v.message))
+            for v in verdict.violations))
 
     def enforce(self, name: str, params: Optional[Mapping[str, Any]] = None) -> Verdict:
         """Like ``check`` but raises ``PolicyViolation`` if the call is blocked."""
@@ -134,6 +168,13 @@ def _wrap(get_monitor: Callable[[], "Monitor"], f: F, name: Optional[str]) -> F:
         return f(*args, **kwargs)
     wrapper.__surject_guarded__ = True  # type: ignore[attr-defined]
     return wrapper  # type: ignore[return-value]
+
+
+def _warn(message: str) -> None:
+    try:
+        sys.stderr.write(f"[surject] {message}\n")
+    except Exception:
+        pass
 
 
 def _param_binder(f: Callable[..., Any]) -> Callable[[tuple, dict], Dict[str, Any]]:

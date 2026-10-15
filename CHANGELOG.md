@@ -24,6 +24,14 @@ The first real release. Everything below is new since the 0.0.1 placeholder.
 - Paths are normalized before matching (`..`, `\`, `~`). Absolute paths
   inside the project match `./` rules. `dir/**` also matches `dir` itself.
 
+### Checkers
+- `checker: python | lean`: the Python reference checker, or an external
+  verified checker (the Lean kernel) over a documented line protocol.
+  If the kernel fails, monitor mode falls back to Python and enforce mode
+  blocks.
+- `docs/KERNEL.md` specifies the checker contract, and
+  `tests/conformance/` holds 223 test cases every checker must pass.
+
 ### Connecting to agents
 - `@surject.guard`, `surject.check` and `Monitor` for your own Python tools
   (sync, async, methods).

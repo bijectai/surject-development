@@ -19,6 +19,7 @@ import yaml
 DEFAULT_POLICY_FILE = "surject.yaml"
 
 MODES = ("monitor", "enforce")
+CHECKERS = ("python", "lean")
 UNKNOWN_TOOL_ACTIONS = ("allow", "warn", "block")
 TYPE_NAMES = ("string", "integer", "number", "boolean", "array", "object", "null")
 
@@ -84,6 +85,7 @@ class PathRules:
 class Policy:
     version: int = 1
     mode: str = "monitor"
+    checker: str = "python"
     unknown_tools: str = "warn"
     tools: Mapping[str, ToolRule] = field(default_factory=dict)
     paths: PathRules = field(default_factory=PathRules)
@@ -129,7 +131,7 @@ def policy_from_dict(data: Any, source: Optional[str] = None,
     _expect(data, dict, "policy")
     root = normalize_path(root, home=home) if root else None
     ctx = _Ctx(root=root, home=home)
-    _reject_unknown(data, {"version", "mode", "unknown_tools", "tools", "paths",
+    _reject_unknown(data, {"version", "mode", "checker", "unknown_tools", "tools", "paths",
                            "rate_limit", "redact"}, "policy")
 
     version = data.get("version", 1)
@@ -138,6 +140,9 @@ def policy_from_dict(data: Any, source: Optional[str] = None,
 
     mode = data.get("mode", "monitor")
     _expect_choice(mode, MODES, "mode")
+
+    checker = data.get("checker", "python")
+    _expect_choice(checker, CHECKERS, "checker")
 
     unknown = data.get("unknown_tools", "warn")
     _expect_choice(unknown, UNKNOWN_TOOL_ACTIONS, "unknown_tools")
@@ -159,6 +164,7 @@ def policy_from_dict(data: Any, source: Optional[str] = None,
     return Policy(
         version=version,
         mode=mode,
+        checker=checker,
         unknown_tools=unknown,
         tools=tools,
         paths=paths,
