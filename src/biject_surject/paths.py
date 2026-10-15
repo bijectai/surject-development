@@ -13,7 +13,7 @@ import re
 import shlex
 from typing import Any, Iterable, Iterator, List, Mapping, Tuple
 
-MAX_DEPTH = 4
+MAX_DEPTH = 8
 
 PATH_PARAM_NAMES = frozenset({
     "path", "paths", "file", "files", "filepath", "file_path", "file_paths",
@@ -63,7 +63,7 @@ def is_path_param(name: Any, extra: Iterable[str] = ()) -> bool:
         return False
     snake = "_".join(words(name))
     return (snake in PATH_PARAM_NAMES or snake.endswith(PATH_PARAM_SUFFIXES)
-            or name in extra or snake in extra)
+            or snake in {"_".join(words(e)) for e in extra})
 
 
 def path_args(params: Mapping[str, Any], extra: Iterable[str] = ()) -> Iterator[Tuple[str, str, str]]:
@@ -80,7 +80,7 @@ def path_args(params: Mapping[str, Any], extra: Iterable[str] = ()) -> Iterator[
                 if path is not None:
                     yield label, top, path
         elif isinstance(value, Mapping):
-            for k, v in value.items():
+            for k, v in _sorted_items(value):
                 yield from walk(v, f"{label}.{k}", top, is_path_param(k, extra), depth + 1)
         elif isinstance(value, (list, tuple)):
             for i, v in enumerate(value):
@@ -88,8 +88,14 @@ def path_args(params: Mapping[str, Any], extra: Iterable[str] = ()) -> Iterator[
 
     if not isinstance(params, Mapping):
         return
-    for key, value in params.items():
+    for key, value in _sorted_items(params):
         yield from walk(value, str(key), str(key), is_path_param(key, extra), 0)
+
+
+def _sorted_items(mapping: Mapping[Any, Any]):
+    """Keys in code-point order, so results never depend on the order a
+    JSON object happened to arrive in (KERNEL.md section 4.1)."""
+    return sorted(((str(k), v) for k, v in mapping.items()), key=lambda kv: kv[0])
 
 
 def _strip_file_uri(value: str):
@@ -181,7 +187,7 @@ def command_args(params: Mapping[str, Any]) -> Iterator[Tuple[str, str, str]]:
     """Yield (label, top_level_param, command) for top-level command strings."""
     if not isinstance(params, Mapping):
         return
-    for key, value in params.items():
+    for key, value in _sorted_items(params):
         if is_command_param(key):
             if isinstance(value, str):
                 yield str(key), str(key), value
