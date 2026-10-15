@@ -190,3 +190,12 @@ def test_load_policy_sets_root_to_policy_dir(tmp_path):
     policy = load_policy(f)
     v = check(policy, ToolCall("write_file", {"path": str(tmp_path / "data" / "raw" / "x.csv")}))
     assert rules(v) == ["tools.write_file.params.path.not_glob[0]"]
+
+
+def test_not_regex():
+    policy = "tools: {Bash: {params: {command: {not_regex: 'rm\s+-rf'}}}}"
+    assert run(policy, "Bash", {"command": "ls -la"}).ok
+    v = run(policy, "Bash", {"command": "rm  -rf /"})
+    assert rules(v) == ["tools.Bash.params.command.not_regex"]
+    assert v.violations[0].message == "'command' must not match /rm\s+-rf/"
+    assert rules(run(policy, "Bash", {"command": 3})) == ["tools.Bash.params.command.not_regex"]

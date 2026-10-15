@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from biject_surject.policy import (
@@ -135,3 +137,41 @@ def test_normalize_path(raw, norm):
 ])
 def test_glob(pattern, path, hit):
     assert bool(compile_glob(pattern).regex.match(normalize_path(path))) is hit
+
+
+# -- rule regexes are limited to what a verified checker can implement ------
+
+
+@pytest.mark.parametrize("pattern", [
+    r"^https://api\.example\.com/",
+    r"(?i)^select\b",
+    r"^[a-z0-9_-]{1,64}$",
+    r"^(foo|bar)+baz?$",
+    r"\d{3}-\d{4}",
+    r"^ord_[A-Za-z0-9]+$",
+])
+def test_simple_regexes_are_accepted(pattern):
+    p = parse_policy(f"tools: {{t: {{params: {{x: {{regex: '{pattern}', not_regex: '{pattern}'}}}}}}}}")
+    assert p.tools["t"].params["x"].regex.pattern == pattern
+
+
+@pytest.mark.parametrize("pattern, message", [
+    (r"^(?!.*rm -rf)", "lookarounds aren't supported"),
+    (r"(?<=a)b", "lookarounds aren't supported"),
+    (r"(a)\1", "backreferences aren't supported"),
+    (r"(?P<x>a)(?P=x)", "backreferences aren't supported"),
+    (r"(a)?(?(1)b|c)", "conditional groups aren't supported"),
+    (r"(?s).*", "only the (?i) flag"),
+    (r"(?m)^x$", "only the (?i) flag"),
+    (r"a(?i:b)", "scoped flags"),
+])
+def test_unsupported_regex_features_are_rejected(pattern, message):
+    for key in ("regex", "not_regex"):
+        with pytest.raises(PolicyError, match=re.escape(message)) as exc:
+            parse_policy(f"tools: {{t: {{params: {{x: {{{key}: '{pattern}'}}}}}}}}")
+        assert exc.value.where == f"tools.t.params.x.{key}"
+
+
+def test_redact_patterns_are_not_restricted():
+    p = parse_policy(r"redact: {patterns: ['(?<=MRN-)\d+']}")
+    assert p.redact_patterns

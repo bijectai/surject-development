@@ -130,10 +130,19 @@ tools:
 | `equals` | Exactly this value. |
 | `one_of` | One of a list of values. |
 | `regex` | Must match. The pattern can match anywhere in the value; anchor with `^` and `$` to require the whole value. |
+| `not_regex` | Must not match anywhere in the value. Use it for "never contains …" rules. |
 | `glob` | Path must be inside one of these patterns. |
 | `not_glob` | Path must not be inside any of these patterns. |
 | `min`, `max` | Numeric bounds, inclusive. |
 | `max_length` | Max length of a string, list or mapping. |
+
+Rule regexes use a deliberately simple dialect, so a verified checker can
+implement them exactly: character classes, alternation, repetition,
+anchors, `` and a leading `(?i)` for case-insensitive matching all work.
+Lookarounds, backreferences, conditional groups and other flags are
+rejected by `surject validate`. Write "must not contain X" as
+`not_regex: X` instead of a negative lookahead. (`redact.patterns` has no
+such limits.)
 
 Parameters you don't list aren't checked. A violation names the exact rule
 that failed, e.g. `tools.query.params.limit.max`.

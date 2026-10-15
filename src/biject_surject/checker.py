@@ -223,6 +223,11 @@ def _check_param(name: str, rule: ParamRule, params: Mapping[str, Any],
             fail("regex", "must be a string to match a pattern")
         elif not rule.regex.search(value):
             fail("regex", f"must match /{rule.regex.pattern}/")
+    if rule.not_regex is not None:
+        if not isinstance(value, str):
+            fail("not_regex", "must be a string to match a pattern")
+        elif rule.not_regex.search(value):
+            fail("not_regex", f"must not match /{rule.not_regex.pattern}/")
     if rule.glob or rule.not_glob:
         if not isinstance(value, str):
             key = "glob" if rule.glob else "not_glob"

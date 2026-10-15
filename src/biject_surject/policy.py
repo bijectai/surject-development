@@ -56,6 +56,7 @@ class ParamRule:
     has_equals: bool = False
     one_of: Optional[Tuple[Any, ...]] = None
     regex: Optional[Pattern[str]] = None
+    not_regex: Optional[Pattern[str]] = None
     glob: Tuple[Glob, ...] = ()
     not_glob: Tuple[Glob, ...] = ()
     min: Optional[float] = None
@@ -261,7 +262,7 @@ def _parse_tool(spec: Any, where: str) -> ToolRule:
     return ToolRule(params=params, rate_limit=rate_limit)
 
 
-_PARAM_KEYS = {"required", "type", "equals", "one_of", "regex", "glob",
+_PARAM_KEYS = {"required", "type", "equals", "one_of", "regex", "not_regex", "glob",
                "not_glob", "min", "max", "max_length"}
 
 
@@ -282,8 +283,9 @@ def _parse_param(rule: Any, where: str) -> ParamRule:
     if "one_of" in rule:
         _expect(rule["one_of"], list, f"{where}.one_of")
         kw["one_of"] = tuple(rule["one_of"])
-    if "regex" in rule:
-        kw["regex"] = _compile_regex(rule["regex"], f"{where}.regex")
+    for key in ("regex", "not_regex"):
+        if key in rule:
+            kw[key] = _compile_rule_regex(rule[key], f"{where}.{key}")
     for key in ("glob", "not_glob"):
         if key in rule:
             kw[key] = tuple(
@@ -376,6 +378,50 @@ def _string_list(value: Any, where: str) -> List[str]:
     if isinstance(value, list) and all(isinstance(v, str) for v in value):
         return list(value)
     raise PolicyError("expected a string or a list of strings", where)
+
+
+# Rule regexes are limited to features a verified checker (the Lean kernel)
+# can implement exactly as an automaton: no lookarounds, backreferences,
+# conditionals, atomic groups or possessive repeats, and no flags except a
+# leading (?i). Redaction patterns are exempt: they only affect output.
+try:  # Python 3.11+
+    import re._parser as _sre_parse  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - Python 3.9 / 3.10
+    import sre_parse as _sre_parse  # type: ignore[no-redef]
+
+_UNSUPPORTED_REGEX = {
+    "ASSERT": "lookarounds aren't supported (use not_regex for \"must not match\")",
+    "ASSERT_NOT": "lookarounds aren't supported (use not_regex for \"must not match\")",
+    "GROUPREF": "backreferences aren't supported",
+    "GROUPREF_EXISTS": "conditional groups aren't supported",
+    "ATOMIC_GROUP": "atomic groups aren't supported",
+    "POSSESSIVE_REPEAT": "possessive repeats aren't supported",
+}
+
+
+def _compile_rule_regex(value: Any, where: str) -> Pattern[str]:
+    compiled = _compile_regex(value, where)
+    parsed = _sre_parse.parse(value)
+    extra_flags = parsed.state.flags & ~(re.IGNORECASE | re.UNICODE)
+    if extra_flags:
+        raise PolicyError("only the (?i) flag is supported in rule regexes", where)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, _sre_parse.SubPattern):
+            for op, av in node:
+                name = getattr(op, "name", str(op))
+                if name in _UNSUPPORTED_REGEX:
+                    raise PolicyError(_UNSUPPORTED_REGEX[name], where)
+                if name == "SUBPATTERN" and (av[1] or av[2]):
+                    raise PolicyError("scoped flags like (?i:...) aren't supported; "
+                                      "put (?i) at the start", where)
+                walk(av)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item)
+
+    walk(parsed)
+    return compiled
 
 
 def _compile_regex(value: Any, where: str) -> Pattern[str]:

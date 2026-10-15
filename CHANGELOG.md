@@ -15,8 +15,10 @@ The first real release. Everything below is new since the 0.0.1 placeholder.
   tool may touch these) and `paths.read_only` (readable, not changeable).
   Path arguments are found by name, including nested ones, and inside shell
   commands (`cat .env`, `rm -rf .git`).
-- Per-tool rules: `required`, `type`, `equals`, `one_of`, `regex`, `glob`,
-  `not_glob`, `min`, `max`, `max_length`; `allow` / `block` shorthands;
+- Per-tool rules: `required`, `type`, `equals`, `one_of`, `regex`,
+  `not_regex`, `glob`, `not_glob`, `min`, `max`, `max_length`. Rule regexes
+  use a simple dialect (no lookarounds or backreferences) that a verified
+  checker can implement exactly; `allow` / `block` shorthands;
   `unknown_tools: allow | warn | block`.
 - Per-tool and global rate limits.
 - Paths are normalized before matching (`..`, `\`, `~`). Absolute paths
